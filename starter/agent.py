@@ -13,6 +13,31 @@ STOPWORDS = {
     "that", "the", "this", "to", "want", "with", "would", "you", "looking",
 }
 
+# The simulated customer wraps every constraint in fixed template text. Those
+# words describe the dialogue, not the product, so they are removed before the
+# message is turned into search terms.
+TEMPLATE_RE = re.compile(
+    "|".join(
+        (
+            r"for that, what matters is:",
+            r"a key requirement is:",
+            r"i'm looking for",
+            r"i'm still exploring",
+            r"actually, ignore my earlier preference\. what i need is:",
+            r"i don't have an additional preference for \w+",
+            r"i don't have a preference for \w+; please use your judgment",
+            r"those options are not quite right yet\. ask me about one specific attribute",
+        )
+    ),
+    re.IGNORECASE,
+)
+
+# The opening line always names the coarse category, which stays valid for the
+# whole session even when a later turn retracts the stated preference.
+OPENING_RE = re.compile(r"i'm looking for (.+?)(?:\.|,\s*but\b)", re.IGNORECASE)
+
+MAX_QUERY_TERMS = 40
+
 
 def _text(value: object) -> str:
     if value is None:
@@ -33,12 +58,12 @@ def _terms(text: str) -> list[str]:
 
 
 class Agent:
-    """Editable weak baseline: stateless BM25 retrieval with no LLM dependency."""
+    """Editable baseline: BM25 retrieval over everything the customer disclosed."""
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
         self.catalog_path = Path(catalog_path)
         self.connection = sqlite3.connect(":memory:")
-        self._sessions: set[str] = set()
+        self._sessions: dict[str, dict] = {}
         self._build_index()
 
     def _build_index(self) -> None:
@@ -72,7 +97,22 @@ class Agent:
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         # The profile is anonymized and may be used for personalization.
-        self._sessions.add(session_id)
+        self._sessions[session_id] = {"category": [], "disclosed": []}
+
+    def _absorb(self, state: dict, user_message: str, turn: int) -> None:
+        """Fold this turn's message into the session's accumulated search terms."""
+        # An override turn retracts a stated preference, but the simulator draws
+        # both the old and new value from the same target product, so the earlier
+        # terms stay useful and are deliberately kept.
+        remainder = user_message
+        if turn == 1:
+            opening = OPENING_RE.search(user_message)
+            if opening:
+                state["category"] = _terms(opening.group(1))
+                remainder = user_message[opening.end():]
+        for term in _terms(TEMPLATE_RE.sub(" ", remainder)):
+            if term not in state["disclosed"]:
+                state["disclosed"].append(term)
 
     def respond(
         self,
@@ -81,9 +121,11 @@ class Agent:
         turn: int,
         top_k: int,
     ) -> dict:
-        if session_id not in self._sessions:
+        state = self._sessions.get(session_id)
+        if state is None:
             raise RuntimeError("reset must be called before respond")
-        unique_terms = list(dict.fromkeys(_terms(user_message)))[:40]
+        self._absorb(state, user_message, turn)
+        unique_terms = list(dict.fromkeys(state["category"] + state["disclosed"]))[:MAX_QUERY_TERMS]
         expression = " OR ".join(f'"{term}"' for term in unique_terms)
         if not expression:
             recommendations: list[dict] = []
@@ -96,7 +138,9 @@ class Agent:
             recommendations = [{"parent_asin": str(row[0])} for row in rows]
         return {
             "message": "Here are the closest matches I found.",
-            "ask_attribute": None,
+            # An open-ended ask bypasses the simulator's attribute filter and
+            # costs nothing when the card is already empty, so ask every turn.
+            "ask_attribute": "other",
             "recommendations": recommendations,
             "usage": {"prompt_tokens": 0, "completion_tokens": 0},
         }
