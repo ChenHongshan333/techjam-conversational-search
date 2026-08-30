@@ -46,6 +46,54 @@ The command writes per-session results and aggregate metrics to `results.json`.
 The included weak BM25 starter scores Hit Rate@10 `0.125`, MRR `0.068034`, and
 MTTC `9.81` on the released public set. See `docs/baseline_results.json`.
 
+## Enhanced Hybrid Agent
+
+The current entry point uses structured constraint state, fielded BM25 routes,
+reciprocal-rank fusion, and unseen-candidate rotation without requiring an API.
+On the released 200-session set, this offline configuration currently scores:
+
+```text
+Hit Rate@10  0.995
+MRR          0.741480
+MTTC         2.055
+Score        0.898844
+```
+
+Optional OpenRouter components are available for validated GPT-5.6 Luna query
+rewriting, two-view Qwen3-Embedding-8B product embeddings, and instruction-aware
+Qwen3-Reranker-8B cross-encoder reranking. They
+are disabled by default so tests and offline evaluation stay reproducible. Copy
+the non-secret settings from `.env.example` into `.env` and enable only the
+components being evaluated:
+
+```bash
+TECHJAM_LLM_REWRITE=1
+TECHJAM_DENSE_RETRIEVAL=1
+TECHJAM_RERANK=1
+```
+
+Dense retrieval additionally needs NumPy and a one-time cached catalog index:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements-semantic.txt
+TECHJAM_DENSE_RETRIEVAL=1 .venv/bin/python -m shopping_agent.build_semantic_index
+```
+
+The index is written below `artifacts/semantic_cache/`, which is ignored by Git.
+Each successful field batch is checkpointed before the next batch completes, so
+the same command safely resumes after provider overload, a disconnect, or an
+interrupted process. Dense retrieval never starts a catalog build inside a live
+shopping turn; a missing index produces a diagnostic and falls back to lexical
+retrieval. Query vectors are cached independently so repeated conversation states
+and repeated evaluations do not call the embedding API again. Rank fusion keeps
+the proven lexical route dominant by default; dense identity and attribute routes
+act as semantic evidence rather than replacing exact metadata matches. Reranker
+results are also cached and conservatively fused with the hybrid order instead of
+being allowed to overwrite exact-match evidence.
+At runtime, remote failures fall back to the deterministic offline ranking and
+are exposed in the dashboard diagnostics.
+
 ## Agent Interface
 
 ```python
