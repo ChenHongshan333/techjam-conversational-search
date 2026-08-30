@@ -50,6 +50,7 @@ class QuestionPlan:
     reason: str = ""
     confidence: float = 0.0
     information_exhausted: bool = False
+    protocol_fallback: bool = False
 
 
 class ClarificationPolicy:
@@ -78,7 +79,10 @@ class ClarificationPolicy:
             if attribute in scores:
                 scores[attribute] -= 3.0
 
-        for tag in state.user_profile.get("preference_tags") or []:
+        profile_dimensions = state.profile_dimensions or list(
+            state.user_profile.get("preference_tags") or []
+        )
+        for tag in profile_dimensions:
             mapped = self._profile_attribute(str(tag))
             if mapped in scores and mapped not in known:
                 scores[mapped] += 0.8
@@ -98,14 +102,21 @@ class ClarificationPolicy:
         focus, score = max(scores.items(), key=lambda item: (item[1], item[0]))
         confidence = max(0.0, min(1.0, score / 3.0))
         reason = ", ".join(reasons[focus]) or "best unanswered clarification"
+        specific_attempts = sum(attribute != "other" for attribute in state.asked_attributes)
+        use_specific_attribute = (
+            state.last_answer_source != "fixed"
+            and focus not in known
+            and focus not in rejected
+            and confidence >= 0.68
+            and specific_attempts < 2
+        )
         return QuestionPlan(
-            # `other` lets the deterministic evaluator reveal any remaining card
-            # value, while the natural-language message still has a useful focus.
-            ask_attribute="other",
+            ask_attribute=focus if use_specific_attribute else "other",
             focus_attribute=focus,
             topics=TOPICS[focus],
             reason=reason,
             confidence=confidence,
+            protocol_fallback=not use_specific_attribute,
         )
 
     @staticmethod

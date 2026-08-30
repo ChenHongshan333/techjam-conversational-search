@@ -8,12 +8,15 @@ shopping_agent/
 ├── text.py                  shared text normalization helpers
 ├── build_semantic_index.py  semantic-index CLI
 ├── conversation/
+│   ├── answers.py           fixed/rule/LLM answer interpretation
 │   ├── intent.py            buying/browsing intent classification
 │   ├── parser.py            deterministic message parsing
+│   ├── profile.py           profile dimension/value distillation
 │   ├── state.py             conversation-state updates
 │   └── questions.py         clarification planning and rendering
 ├── retrieval/
 │   ├── catalog.py           catalog loading, exact match, and BM25
+│   ├── exploration.py       facet-diverse exhausted-state exploration
 │   ├── query.py             lexical and semantic query construction
 │   └── semantic.py          dense retrieval, fusion, and reranking
 └── providers/

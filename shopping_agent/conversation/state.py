@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from ..models import Constraint, SessionState
+from ..models import Constraint, ParsedMessage, SessionState
 from ..text import classify_constraint, normalize
 from .parser import parse_message
 
@@ -12,9 +12,10 @@ def ingest_message(
     message: str,
     turn: int,
     constraint_resolver: Callable[[str], list[str]] | None = None,
+    parsed: ParsedMessage | None = None,
 ) -> None:
     state.messages.append(message)
-    parsed = parse_message(message)
+    parsed = parsed or parse_message(message)
 
     if parsed.category:
         state.category = parsed.category

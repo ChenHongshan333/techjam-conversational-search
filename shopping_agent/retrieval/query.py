@@ -15,6 +15,7 @@ NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
 class SearchQuery:
     category: str
     constraints: tuple[str, ...]
+    profile_preferences: tuple[str, ...]
     lexical_query: str
     semantic_query: str
     rewrite_used: bool = False
@@ -27,38 +28,47 @@ class QueryBuilder:
     def __init__(self, client: OpenRouterClient | None = None, rewrite_model: str = "") -> None:
         self.client = client
         self.rewrite_model = rewrite_model
-        self.cache: dict[tuple[str, tuple[str, ...]], SearchQuery] = {}
+        self.cache: dict[
+            tuple[str, tuple[str, ...], tuple[str, ...]], SearchQuery
+        ] = {}
 
     def build(self, state: SessionState) -> SearchQuery:
         category = state.category or ""
         constraints = tuple(item.value for item in state.active_constraints)
-        key = (category, constraints)
+        profile_preferences = tuple(state.profile_preferences)
+        key = (category, constraints, profile_preferences)
         cached = self.cache.get(key)
         if cached is not None:
             return replace(cached, prompt_tokens=0, completion_tokens=0)
 
-        lexical_query = " ".join((category, *constraints)).strip()
+        lexical_query = " ".join((category, *constraints, *profile_preferences)).strip()
         clauses = [f"Product type: {category}." if category else ""]
         if constraints:
             clauses.append("Requirements: " + "; ".join(constraints) + ".")
+        if profile_preferences:
+            clauses.append(
+                "Historical preferences (soft): " + "; ".join(profile_preferences) + "."
+            )
         deterministic = " ".join(part for part in clauses if part).strip()
         result = SearchQuery(
             category=category,
             constraints=constraints,
+            profile_preferences=profile_preferences,
             lexical_query=lexical_query,
             semantic_query=deterministic or lexical_query,
         )
-        if self.client is None or not constraints:
+        rewrite_inputs = (*constraints, *profile_preferences)
+        if self.client is None or not rewrite_inputs:
             self.cache[key] = result
             return result
 
         try:
-            response = self.client.rewrite_query(self.rewrite_model, category, list(constraints))
+            response = self.client.rewrite_query(self.rewrite_model, category, list(rewrite_inputs))
             content = response.payload["choices"][0]["message"]["content"]
             parsed = json.loads(content)
             rewrite = str(parsed.get("semantic_query") or "").strip()
             used = parsed.get("used_constraint_indexes")
-            expected = set(range(len(constraints)))
+            expected = set(range(len(rewrite_inputs)))
             used_indexes = {int(index) for index in used} if isinstance(used, list) else set()
             input_numbers = set(NUMBER_RE.findall(lexical_query))
             output_numbers = set(NUMBER_RE.findall(rewrite))
@@ -71,6 +81,7 @@ class QueryBuilder:
             result = SearchQuery(
                 category=category,
                 constraints=constraints,
+                profile_preferences=profile_preferences,
                 lexical_query=lexical_query,
                 semantic_query=rewrite,
                 rewrite_used=True,
@@ -81,6 +92,7 @@ class QueryBuilder:
             result = SearchQuery(
                 category=category,
                 constraints=constraints,
+                profile_preferences=profile_preferences,
                 lexical_query=lexical_query,
                 semantic_query=deterministic or lexical_query,
                 error=str(exc)[:300],

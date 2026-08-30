@@ -75,21 +75,21 @@
 <body>
 <main class="page">
   <header>
-    <div><h1>Shopping Agent：Roadmap × Runtime</h1><p>上半部分与 <code>1411_plan.md</code> 的七项计划一一对应；下半部分单独展示代码的实际执行流程，不再把“要解决的问题”和“程序运行顺序”混在一起。</p></div>
+    <div><h1>Shopping Agent：Roadmap × Runtime</h1><p>上半部分与 <code>1411_plan.md</code> 的七项计划一一对应；下半部分展示 Next Moves 1–5 实施后的实际执行流程。</p></div>
     <div class="stamp">当前工作区状态：2026-08-30</div>
   </header>
-  <div class="legend"><span><i class="dot old"></i><b>黑色</b> 本轮 Clarification 改造前已有</span><span><i class="dot new"></i><b>蓝色</b> 本轮已经实施</span><span><i class="dot todo"></i><b>红色虚线</b> Plan 中尚未实施</span></div>
+  <div class="legend"><span><i class="dot old"></i><b>黑色</b> Next Moves 实施前已有</span><span><i class="dot new"></i><b>蓝色</b> Next Moves 1–5 已实施</span><span><i class="dot todo"></i><b>红色虚线</b> 仍未实施</span></div>
 
   <section class="section">
     <div class="section-head"><h2>A. 与 1411_plan.md 的七项计划一一对应</h2><p>每张卡片对应 Plan 的一个章节，并明确区分原有能力、本次完成和剩余工作。</p></div>
     <div class="roadmap">
-      <article class="road-card wide"><h3>1. 唯一失败用例：public_0020</h3><p>目标商品已经被召回，但大约排在第 214 位。因此它不是召回失败，而是排序能力与信息不足共同造成的问题。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>Exact/BM25、可选 Dense、RRF，以及问完可用信息后对未展示商品进行轮换。完整基线为 199/200。</p></div><div class="state new"><h4>本次已实现</h4><p>完成失败归因；提问规划会寻找更有区分度的信息；增加“信息已耗尽”状态，避免反复追问。</p></div><div class="state todo"><h4>仍未实现</h4><p>自然语言回答提取、按身份/风格/使用场景进行簇探索，以及在验证后适当降低热门度压制。</p></div></div></article>
-      <article class="road-card"><h3>2. 用户意图：购买还是浏览</h3><p>固定 evaluator 的表达容易识别；真实自然语言需要一个保守、可回退的识别方案。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>解析器能识别固定的 browsing 句式，但识别结果几乎不会影响后续流程。</p></div><div class="state new"><h4>本次已实现</h4><p>混合分类器：规则优先；首轮表达不清楚时可选用 LLM；输出意图类型与置信度。</p></div><div class="state todo"><h4>仍未实现</h4><p>让不同意图真正影响检索、结果多样性和探索强度。目前主要只影响提问优先级。</p></div></div></article>
-      <article class="road-card"><h3>3. 用户画像的蒸馏与使用</h3><p>必须区分“用户在意哪些维度”和“用户具体偏好什么取值”。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>画像标签只以 0.15 的很小权重参与 lexical 排序。</p></div><div class="state new"><h4>本次已实现</h4><p>material、fit 等标签会提高对应澄清问题的优先级。</p></div><div class="state todo"><h4>仍未实现</h4><p>蒸馏正向/负向偏好及置信度；只有明确的具体偏好才能进入 Query 与 Dense 检索。</p></div></div></article>
+      <article class="road-card wide"><h3>1. 唯一失败用例：public_0020</h3><p>目标商品已经被召回，但大约排在第 214 位。因此它不是召回失败，而是排序能力与信息不足共同造成的问题。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>Exact/BM25、可选 Dense、RRF，以及问完可用信息后对未展示商品进行轮换。完整基线为 199/200。</p></div><div class="state new"><h4>本次已实现</h4><p>自然回答提取、信息耗尽判断，以及按款式/对象/场合进行候选簇探索；public_0020 在第 7 轮 Rank 1 命中。</p></div><div class="state todo"><h4>仍未实现</h4><p>基于更大数据集验证 popularity signal 调整；当前没有为了单个案例直接修改热门度权重。</p></div></div></article>
+      <article class="road-card"><h3>2. 用户意图：购买还是浏览</h3><p>固定 evaluator 的表达容易识别；真实自然语言需要一个保守、可回退的识别方案。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>解析器能识别固定的 browsing 句式，但识别结果几乎不会影响后续流程。</p></div><div class="state new"><h4>本次已实现</h4><p>规则 + 可选 LLM 的混合分类；意图影响提问顺序，并在 Dense 开启时切换 precision/semantic-diversity 融合权重。</p></div><div class="state todo"><h4>仍未实现</h4><p>纯 lexical 内部各 route 的动态调权，以及在更大测试集上验证 browsing 多样性强度。</p></div></div></article>
+      <article class="road-card"><h3>3. 用户画像的蒸馏与使用</h3><p>必须区分“用户在意哪些维度”和“用户具体偏好什么取值”。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>画像标签只以 0.15 的很小权重参与 lexical 排序。</p></div><div class="state new"><h4>本次已实现</h4><p>画像已拆成重要维度、明确正向偏好和负向偏好；抽象标签只影响提问，明确取值才进入 Query/排序。</p></div><div class="state todo"><h4>仍未实现</h4><p>从更复杂 profile summary 中进行带证据和置信度的蒸馏，以及对 profile 动态权重做系统评测。</p></div></div></article>
       <article class="road-card"><h3>4. 上下文与记忆管理</h3><p>目前最多十轮，对上下文压力不大；以后 LLM 开始读取更多历史时，动态压缩才真正有价值。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>当前/已替换约束、覆盖项、拒绝项、上一轮结果和已展示结果。</p></div><div class="state new"><h4>本次已实现</h4><p>意图、置信度、提问焦点、提问历史，以及“信息已耗尽”状态。</p></div><div class="state todo"><h4>仍未实现</h4><p>近期原始对话 + 结构化长期记忆 + 压缩历史，并确保否定和偏好覆盖不会丢失。</p></div></div></article>
       <article class="road-card"><h3>5. 失败感知与 Prompt 演进</h3><p>Agent 看不到 ground truth，只能通过重复、停滞、冲突和用户不满意等可观测信号判断策略是否失效。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>检索诊断与远程 provider 回退，但系统并不知道“当前策略本身正在失败”。</p></div><div class="state new"><h4>本次已实现</h4><p>只加入了基础的“信息已耗尽”信号，还不等于完整的失败感知。</p></div><div class="state todo"><h4>仍未实现</h4><p>停滞/冲突检测、有限且可控的恢复动作，以及带回归门槛的离线 Prompt 演进。</p></div></div></article>
-      <article class="road-card"><h3>6. Ask Attribute 不能永远只问 other</h3><p>自然语言问题应该足够具体，同时继续兼容 bare-minimum evaluator 的协议。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>每轮都输出 <code>other</code>。它在 public evaluator 上有效，但在真实对话里过于模糊。</p></div><div class="state new"><h4>本次已实现</h4><p>规划器先选 focus/topics，再由模板生成具体问题；协议层暂时仍输出 <code>other</code>。</p></div><div class="state todo"><h4>仍未实现</h4><p>基于 evaluator 可回答性的结构化属性选择、LLM 自然表达，以及检查 message 与 ask_attribute 一致性的 validator。</p></div></div></article>
-      <article class="road-card"><h3>7. Semantic Search 与动态权重</h3><p>Dense 目前只带来很小的 MRR 增益。50:1:1 看起来差距很大，但这本身不足以证明应该提高 Dense 权重。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>Exact/分字段 BM25、两路 Dense、加权 RRF，以及采用保守融合方式的可选 reranker。</p></div><div class="state new"><h4>本次已实现</h4><p>没有修改任何检索权重；完整基线指标保持不变。</p></div><div class="state todo"><h4>仍未实现</h4><p>根据精确匹配强度、意图和 query 抽象程度动态调权；用户画像的优先级必须低于当前明确意图。</p></div></div></article>
+      <article class="road-card"><h3>6. Ask Attribute 不能永远只问 other</h3><p>自然语言问题应该足够具体，同时继续兼容 bare-minimum evaluator 的协议。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>每轮都输出 <code>other</code>。它在 public evaluator 上有效，但在真实对话里过于模糊。</p></div><div class="state new"><h4>本次已实现</h4><p>focus/message/ask_attribute 已分离；固定协议继续回退 other，自然对话在高置信度时输出具体属性。</p></div><div class="state todo"><h4>仍未实现</h4><p>LLM 问句润色和独立 validator；目前问题表达仍由可复现模板生成。</p></div></div></article>
+      <article class="road-card"><h3>7. Semantic Search 与动态权重</h3><p>Dense 目前只带来很小的 MRR 增益。50:1:1 看起来差距很大，但这本身不足以证明应该提高 Dense 权重。</p><div class="states"><div class="state old"><h4>之前已有</h4><p>Exact/分字段 BM25、两路 Dense、加权 RRF，以及采用保守融合方式的可选 reranker。</p></div><div class="state new"><h4>本次已实现</h4><p>Dense 开启时根据 buying/browsing/uncertain 切换保守融合权重；明确 profile 值作为低优先级软信号。</p></div><div class="state todo"><h4>仍未实现</h4><p>基于 exact strength 和 query 抽象度动态调整 lexical 内部路线，并完成 Dense 新基线回归。</p></div></div></article>
     </div>
   </section>
 
@@ -105,10 +105,10 @@
         </defs>
         <path class="wire old" marker-end="url(#old-arrow)" d="M680 151 C610 165,520 160,465 180"/>
         <path class="wire new" marker-end="url(#new-arrow)" d="M820 151 C870 165,975 160,1035 180"/>
-        <path class="wire todo" marker-end="url(#todo-arrow)" d="M635 92 C410 90,210 110,185 180"/><text class="wire-label todo" x="320" y="104">固定解析器无法理解</text>
+        <path class="wire new" marker-end="url(#new-arrow)" d="M635 92 C410 90,210 110,185 180"/><text class="wire-label new" x="320" y="104">固定解析器无法理解</text>
         <path class="wire old" marker-end="url(#old-arrow)" d="M465 306 C500 335,590 330,665 350"/>
         <path class="wire new" marker-end="url(#new-arrow)" d="M1035 306 C980 340,900 330,855 350"/>
-        <path class="wire todo" marker-end="url(#todo-arrow)" d="M300 245 C430 280,540 330,635 395"/>
+        <path class="wire new" marker-end="url(#new-arrow)" d="M300 245 C430 280,540 330,635 395"/>
         <path class="wire new" marker-end="url(#new-arrow)" d="M665 476 C590 500,525 520,465 560"/><text class="wire-label new" x="535" y="508">意图 + 状态</text>
         <path class="wire new" marker-end="url(#new-arrow)" d="M635 58 C400 8,85 20,35 120 C4 265,25 470,185 560"/><text class="wire-label new" x="34" y="405">用户画像标签</text>
         <path class="wire new" marker-end="url(#new-arrow)" d="M300 625 C320 625,330 625,350 625"/><text class="wire-label new" x="301" y="615">优先级</text>
@@ -125,7 +125,7 @@
         <path class="wire old" marker-end="url(#old-arrow)" d="M1015 1066 C1015 1080,1015 1095,1015 1110"/>
         <path class="wire new" marker-end="url(#new-arrow)" d="M465 886 C465 915,465 930,465 960"/><text class="wire-label new" x="477" y="925">没有更多信息</text>
         <path class="wire old" marker-end="url(#old-arrow)" d="M580 1025 C700 1040,800 1100,900 1165"/>
-        <path class="wire todo" marker-end="url(#todo-arrow)" d="M1130 1175 C1150 1175,1170 1175,1190 1175"/>
+        <path class="wire new" marker-end="url(#new-arrow)" d="M1130 1175 C1150 1175,1170 1175,1190 1175"/>
         <path class="wire new" marker-end="url(#new-arrow)" d="M465 886 C520 1030,590 1140,665 1190"/>
         <path class="wire old" marker-end="url(#old-arrow)" d="M900 1005 C820 1070,780 1130,760 1190"/>
         <path class="wire old" marker-end="url(#old-arrow)" d="M1015 1236 C970 1265,910 1270,845 1260"/>
@@ -133,24 +133,24 @@
         <path class="wire old" marker-end="url(#old-arrow)" d="M680 1316 C420 1360,110 1290,35 1040 C-15 865,15 245,635 90"/><text class="wire-label old" x="42" y="930">未命中且未满 10 轮：进入下一轮</text>
       </svg>
       <div class="node input"><span class="tag">之前已有</span><h3>1. 用户消息 + 用户画像</h3><p><strong>输入：</strong>session、message、turn、top_k。</p><p><strong>停止：</strong>目标进入 Top 10，或到第 10 轮。</p></div>
-      <div class="node todo natural"><span class="tag">尚未实现</span><h3>2A. 自然语言回答提取</h3><p><strong>判定：</strong>固定解析器没有提取出有效结构。</p><p><strong>计划方法：</strong>用 LLM schema 提取取值、否定、覆盖关系和置信度。</p></div>
+      <div class="node new natural"><span class="tag">本次已实现</span><span class="tag optional">LLM 可选</span><h3>2A. 自然语言回答提取</h3><p><strong>判定：</strong>固定解析器没有提取出有效结构。</p><p><strong>方法：</strong>保守规则 → 可选 LLM JSON；提取约束、否定、覆盖关系和置信度。</p></div>
       <div class="node parser"><span class="tag">之前已有</span><h3>2B. 固定句式解析器</h3><p><strong>判定：</strong>匹配 evaluator 的 Regex。</p><p><strong>方法：</strong>提取类别、约束、拒绝项和覆盖项。</p></div>
       <div class="node new intent"><span class="tag">本次已实现</span><span class="tag optional">LLM 可选</span><h3>2C. 混合意图识别</h3><p><strong>表达清楚：</strong>走规则，置信度 1.0。</p><p><strong>首轮不清楚：</strong>可用 LLM JSON；低于 0.65 记为 uncertain。</p></div>
       <div class="node new state-node"><span class="tag">已有 + 本次扩展</span><h3>3. 结构化状态</h3><p><strong>原有：</strong>约束、覆盖、拒绝、已展示结果。</p><p><strong>新增：</strong>意图、置信度、提问焦点、信息耗尽。</p></div>
-      <div class="node new profile"><span class="tag">本次已实现</span><h3>画像影响提问优先级</h3><p><strong>判定：</strong>画像在意的维度还没有答案。</p><p><strong>方法：</strong>material/fit 只提高问题优先级，不直接当作商品偏好。</p></div>
+      <div class="node new profile"><span class="tag">本次已实现</span><h3>画像蒸馏与提问优先级</h3><p><strong>方法：</strong>区分重要维度、明确正向值和负向值。</p><p><strong>规则：</strong>material/fit 等维度只指导提问；具体值才进入 Query。</p></div>
       <div class="node new planner"><span class="tag">本次已实现</span><h3>4A. 澄清问题规划器</h3><p><strong>方法：</strong>意图基础分 + 画像加分 + 候选差异 - 重复惩罚。</p><p><strong>输出：</strong>focus、topics、reason、confidence。</p></div>
       <div class="node todo memory"><span class="tag">尚未实现</span><h3>动态记忆</h3><p><strong>启用条件：</strong>LLM 开始读取更长的对话历史。</p><p><strong>方法：</strong>近期原文 + 结构化状态 + 压缩历史。</p></div>
-      <div class="node new template"><span class="tag">本次已实现</span><h3>5A. 模板生成问题</h3><p><strong>判定：</strong>未满 10 轮且仍有信息可问。</p><p><strong>方法：</strong>topics 转成自然模板；协议层暂时仍使用 other。</p></div>
+      <div class="node new template"><span class="tag">本次已实现</span><h3>5A. 双轨问题输出</h3><p><strong>判定：</strong>未满 10 轮且仍有信息可问。</p><p><strong>方法：</strong>自然对话高置信度时问具体属性；固定协议和低置信度回退 other。</p></div>
       <div class="node todo wording"><span class="tag">尚未实现</span><h3>LLM 润色问题</h3><p><strong>职责：</strong>只决定“怎么说”，不决定“问什么”。</p><p><strong>校验：</strong>一次只问一个焦点，并与 ask_attribute 对齐。</p></div>
       <div class="node new exhausted"><span class="tag">本次已实现</span><h3>信息已耗尽</h3><p><strong>判定：</strong>用户对 other 没偏好、拒绝回答 other，或到第 10 轮。</p><p><strong>作用：</strong>停止重复提问。</p></div>
       <div class="node query"><span class="tag">之前已有</span><span class="tag optional">Rewrite 可选</span><h3>4B. Query 构建器</h3><p><strong>方法：</strong>类别 + 当前有效约束，分别构建 lexical 和 semantic query。</p><p><strong>可选：</strong>经过校验的 LLM rewrite。</p></div>
       <div class="node todo failure"><span class="tag">尚未实现</span><h3>失败感知</h3><p><strong>信号：</strong>重复、停滞、冲突、不同检索路线意见不一致。</p><p><strong>方法：</strong>有限恢复动作；离线 Prompt 演进。</p></div>
       <div class="node lexical"><span class="tag">之前已有</span><h3>5B. Lexical 检索</h3><p><strong>始终运行。</strong></p><p><strong>方法：</strong>Exact、交集匹配和多路分字段 BM25。</p></div>
       <div class="node dense"><span class="tag">之前已有</span><span class="tag optional">可选</span><h3>5C. Dense 检索</h3><p><strong>判定：</strong>Dense=1、有 API key 且索引有效。</p><p><strong>方法：</strong>query 与 5 万条商品视图使用同一个 Qwen embedding 模型。</p></div>
-      <div class="node rrf"><span class="tag">之前已有</span><h3>6. 加权 RRF</h3><p><strong>方法：</strong>根据候选在各排名列表中的位置进行投票融合。</p><p><strong>当前权重：</strong>lexical : dense identity : dense attribute = 50:1:1。</p></div>
+      <div class="node new rrf"><span class="tag">已有 + 本次扩展</span><h3>6. Intent-aware 加权 RRF</h3><p><strong>方法：</strong>根据候选在各排名列表中的位置进行投票融合。</p><p><strong>权重：</strong>buying 保守；browsing 提高两路 Dense；uncertain 使用中间策略。</p></div>
       <div class="node reranker"><span class="tag">之前已有</span><span class="tag optional">默认关闭</span><h3>Semantic reranker</h3><p><strong>判定：</strong>RERANK=1。</p><p><strong>方法：</strong>读取 Query + 商品信息，再进行一次保守的 RRF 融合。</p></div>
       <div class="node rotation"><span class="tag">之前已有</span><h3>7. 未展示商品轮换</h3><p><strong>判定：</strong>信息已耗尽，且 query 没有变化。</p><p><strong>方法：</strong>跳过 seen IDs，沿基础排名继续向后展示。</p></div>
-      <div class="node todo cluster"><span class="tag">尚未实现</span><h3>商品簇探索</h3><p><strong>判定：</strong>信息已耗尽，但目标仍未命中。</p><p><strong>方法：</strong>按身份/风格/使用场景探索不同商品簇，提高覆盖面。</p></div>
+      <div class="node new cluster"><span class="tag">本次已实现</span><h3>商品簇探索</h3><p><strong>判定：</strong>信息已耗尽且 query 没有变化。</p><p><strong>方法：</strong>按款式、对象、场合和不同排名深度选择未展示商品。</p></div>
       <div class="node new response"><span class="tag">已有 + 本次扩展</span><h3>8. 响应 + 诊断信息</h3><p><strong>输出：</strong>message、ask_attribute、Top 10、usage。</p><p><strong>新增诊断：</strong>意图判断与提问计划。</p></div>
     </div></div>
   </section>
@@ -159,10 +159,10 @@
     <div class="section-head"><h2>C. 建议实施顺序</h2><p>这里与 plan 文档最后的顺序保持一致。“部分完成”只代表基础已经落地，不代表剩余工作可以跳过。</p></div>
     <div class="order">
       <div class="order-step done"><b>1. 定位 public_0020</b>已完成：确认是排序 + 信息不足</div>
-      <div class="order-step partial"><b>2. 提问 Policy</b>基础已完成；还需回答提取与属性选择</div>
-      <div class="order-step partial"><b>3. 意图路由</b>分类已完成；还需影响检索与多样性</div>
-      <div class="order-step future"><b>4. 用户画像蒸馏</b>区分在意维度与具体偏好取值</div>
-      <div class="order-step future"><b>5. 动态检索融合</b>按意图与 query 调整 lexical/dense/profile</div>
+      <div class="order-step done"><b>2. 提问 Policy</b>回答提取和双轨属性输出已完成</div>
+      <div class="order-step partial"><b>3. 意图路由</b>提问和 Dense 路由已完成；lexical 动态路由待评测</div>
+      <div class="order-step done"><b>4. 用户画像蒸馏</b>已区分在意维度与明确偏好取值</div>
+      <div class="order-step partial"><b>5. 动态检索融合</b>Intent-aware Dense 已完成；完整 route 调权待评测</div>
       <div class="order-step future"><b>6. 动态记忆</b>LLM 对话历史变长后再加入</div>
       <div class="order-step future"><b>7. 失败恢复</b>有限恢复动作，再做离线 Prompt 演进</div>
     </div>

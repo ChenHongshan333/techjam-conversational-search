@@ -13,30 +13,35 @@ Validated on all 200 public sessions:
 |---|---:|---:|---:|---:|
 | Starter BM25 | 0.125 | 0.068034 | 9.810 | — |
 | Structured lexical agent | 0.995 | 0.741480 | 2.055 | 0.898844 |
+| **Clarification + facet exploration (offline)** | **1.000** | **0.739940** | **2.035** | **0.901282** |
 | **Qwen8B dense hybrid** | **0.995** | **0.744899** | **2.055** | **0.899870** |
 
-The final system finds 199/200 targets. The remaining miss is an ambiguous item
-whose distinguishing title text is never disclosed by the simulator.
+The current deterministic path finds 200/200 targets. Facet-diverse exploration
+recovers the formerly missed ambiguous item without changing the evaluator.
+The dense row records the earlier dense ablation and has not yet been rerun on
+top of the new exploration policy.
 
 ## Architecture
 
 ```text
-Customer message
+Customer message → fixed/rule/optional-LLM answer interpreter
       ↓
-Conversation state: category, constraints, overrides, profile
+Conversation state: category, constraints, overrides, intent, distilled profile
       ↓
 ┌──────────────────────────┬─────────────────────────────┐
 │ Exact + fielded BM25     │ Qwen3-Embedding-8B         │
 │ lexical retrieval        │ identity + attribute index │
 └──────────────────────────┴─────────────────────────────┘
       ↓ weighted reciprocal-rank fusion (50:1:1)
-Ranked candidates → unseen-result rotation → Top 10
+Ranked candidates → facet-diverse exhausted-state exploration → Top 10
 ```
 
-The agent asks `other` until the evaluator's finite intent card is exhausted.
-An adaptive clarification policy now separates the natural-language question
-focus from that protocol fallback. Fixed evaluator phrases are classified by
-rules; unclear first-turn messages can optionally use an LLM intent classifier.
+The clarification policy separates natural-language focus from the structured
+protocol. Fixed evaluator conversations keep the backwards-compatible `other`
+fallback; natural conversations can ask a high-confidence specific attribute.
+Fixed answers use Regex, natural follow-ups use conservative rules, and unclear
+answers can optionally use an LLM extractor. Fixed intent phrases use rules;
+unclear first-turn messages can optionally use an LLM intent classifier.
 The question focus combines buying/browsing mode, profile priorities, known and
 rejected constraints, and differences among the current candidates. The LLM is
 not allowed to freely choose questions, and every remote failure falls back to
@@ -60,6 +65,7 @@ Create `.env`:
 
 ```bash
 OPENROUTER_API_KEY=your_key
+TECHJAM_LLM_ANSWER=0
 TECHJAM_LLM_INTENT=0
 TECHJAM_DENSE_RETRIEVAL=1
 TECHJAM_LLM_REWRITE=0
@@ -99,6 +105,7 @@ Then configure:
 ```bash
 export OPENROUTER_API_KEY=your_key
 export TECHJAM_SEMANTIC_INDEX_PATH=artifacts/semantic_cache/catalog_qwen3_embedding_8b_512_v1.npz
+export TECHJAM_LLM_ANSWER=0
 export TECHJAM_LLM_INTENT=0
 export TECHJAM_DENSE_RETRIEVAL=1
 export TECHJAM_LLM_REWRITE=0
