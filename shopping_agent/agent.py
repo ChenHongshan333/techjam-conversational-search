@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .catalog import CatalogIndex
 from .config import RetrievalSettings
+from .conversation.intent import HybridIntentClassifier
+from .conversation.questions import ClarificationPolicy, render_question
+from .conversation.state import ingest_message
 from .models import SessionState
-from .openrouter import OpenRouterClient
-from .policy import build_message, choose_question
-from .query import QueryBuilder
-from .semantic import DenseProductRetriever, ProductReranker, weighted_rrf
-from .state import ingest_message
+from .providers.openrouter import OpenRouterClient
+from .retrieval.catalog import CatalogIndex
+from .retrieval.query import QueryBuilder
+from .retrieval.semantic import DenseProductRetriever, ProductReranker, weighted_rrf
 
 
 class ShoppingAgent:
@@ -26,6 +27,12 @@ class ShoppingAgent:
             client if client and self.settings.rewrite_enabled else None,
             self.settings.rewrite_model,
         )
+        self.intent_classifier = HybridIntentClassifier(
+            client if client and self.settings.intent_enabled else None,
+            self.settings.intent_model,
+            self.settings.intent_confidence_threshold,
+        )
+        self.clarification_policy = ClarificationPolicy()
         self.dense_retriever = (
             DenseProductRetriever(self.catalog, Path(catalog_path), client, self.settings)
             if client and self.settings.dense_enabled else None
@@ -51,9 +58,20 @@ class ShoppingAgent:
             turn,
             constraint_resolver=self.catalog.resolve_constraint_payload,
         )
+        intent = self.intent_classifier.classify(
+            user_message,
+            turn,
+            state.intent_mode,
+            state.intent_confidence,
+        )
+        state.intent_mode = intent.mode
+        state.intent_confidence = intent.confidence
+        state.intent_source = intent.source
+        if intent.mode in {"buying", "browsing"}:
+            state.browsing = intent.mode == "browsing"
         search_query = self.query_builder.build(state)
-        prompt_tokens = search_query.prompt_tokens
-        completion_tokens = search_query.completion_tokens
+        prompt_tokens = search_query.prompt_tokens + intent.prompt_tokens
+        completion_tokens = search_query.completion_tokens + intent.completion_tokens
 
         ranked_pool, retrieval_diagnostics = self.catalog.retrieve_with_diagnostics(
             state,
@@ -99,22 +117,36 @@ class ShoppingAgent:
             state.category or "",
             *(f"{item.attribute}:{item.value.casefold()}" for item in state.active_constraints),
         )
-        exhausted = "other" in state.rejected_attributes
+        exhausted = state.information_exhausted or "other" in state.rejected_attributes
         rotating = exhausted and query_signature == state.last_query_signature
         if rotating:
             unseen = [item for item in ranked_pool if item not in state.seen_recommendations]
             recommendations = (unseen or ranked_pool)[:top_k]
         else:
             recommendations = ranked_pool[:top_k]
-        ask_attribute = choose_question(state, turn, len(recommendations))
+        question_plan = self.clarification_policy.plan(
+            state,
+            turn,
+            [self.catalog.products[item] for item in ranked_pool[:80]],
+        )
+        ask_attribute = question_plan.ask_attribute
         if ask_attribute:
             state.asked_attributes.append(ask_attribute)
+        if question_plan.focus_attribute:
+            state.last_question_focus = question_plan.focus_attribute
+            state.asked_question_focuses.append(question_plan.focus_attribute)
+            state.question_topics = list(question_plan.topics)
         state.previous_recommendations = recommendations
         state.seen_recommendations.update(recommendations)
         state.last_query_signature = query_signature
         self.diagnostics[session_id] = {
             "category": state.category,
             "browsing": state.browsing,
+            "intent_mode": state.intent_mode,
+            "intent_confidence": state.intent_confidence,
+            "intent_source": state.intent_source,
+            "intent_reason": intent.reason,
+            "intent_error": intent.error,
             "override_seen": state.override_seen,
             "boundary_observed": state.boundary_observed,
             "active_constraints": [
@@ -135,6 +167,11 @@ class ShoppingAgent:
                 for constraint in state.superseded_constraints
             ],
             "asked_attributes": list(state.asked_attributes),
+            "question_focus": question_plan.focus_attribute,
+            "question_topics": list(question_plan.topics),
+            "question_reason": question_plan.reason,
+            "question_confidence": question_plan.confidence,
+            "information_exhausted": question_plan.information_exhausted,
             "candidate_rotation_active": rotating,
             "seen_recommendation_count": len(state.seen_recommendations),
             **semantic_diagnostics,
@@ -142,7 +179,7 @@ class ShoppingAgent:
         }
 
         return {
-            "message": build_message(ask_attribute, recommendations),
+            "message": render_question(question_plan, recommendations),
             "ask_attribute": ask_attribute,
             "recommendations": [
                 {"parent_asin": parent_asin}

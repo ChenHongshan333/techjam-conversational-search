@@ -115,6 +115,43 @@ class OpenRouterClient:
             "max_tokens": 180,
         })
 
+    def classify_shopping_intent(self, model: str, message: str) -> OpenRouterResponse:
+        schema = {
+            "name": "shopping_intent",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": ["buying", "browsing", "uncertain"],
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "reason": {"type": "string", "maxLength": 160},
+                },
+                "required": ["intent", "confidence", "reason"],
+                "additionalProperties": False,
+            },
+        }
+        prompt = (
+            "Classify the customer's current shopping mode. Buying means they have a concrete "
+            "product goal, requirement, deadline, or purchase use case. Browsing means they are "
+            "open-endedly exploring. Use uncertain when the message does not support either. "
+            "Do not infer intent from demographics or invent missing needs.\n\n"
+            f"Customer message: {message[:1200]}"
+        )
+        return self._post("chat/completions", {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You classify shopping intent conservatively."},
+                {"role": "user", "content": prompt},
+            ],
+            "reasoning": {"effort": "none"},
+            "response_format": {"type": "json_schema", "json_schema": schema},
+            "temperature": 0,
+            "max_tokens": 120,
+        })
+
     def embeddings(
         self,
         model: str,

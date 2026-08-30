@@ -12,7 +12,7 @@ from evaluator.local_evaluator import (
     materialize_hidden_fields,
     normalize_recommendations,
 )
-from shopping_agent.agent import ShoppingAgent
+from shopping_agent import ShoppingAgent
 
 
 @dataclass

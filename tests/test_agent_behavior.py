@@ -6,15 +6,21 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 
-from shopping_agent.agent import ShoppingAgent
-from shopping_agent.catalog import CatalogIndex
+from shopping_agent import ShoppingAgent
 from shopping_agent.config import RetrievalSettings
+from shopping_agent.conversation.intent import HybridIntentClassifier
+from shopping_agent.conversation.parser import parse_message
+from shopping_agent.conversation.questions import ClarificationPolicy
+from shopping_agent.conversation.state import ingest_message
 from shopping_agent.models import Constraint, SessionState
-from shopping_agent.openrouter import OpenRouterError, OpenRouterResponse
-from shopping_agent.parser import parse_message
-from shopping_agent.query import QueryBuilder
-from shopping_agent.semantic import DenseProductRetriever, embedding_query_document, weighted_rrf
-from shopping_agent.state import ingest_message
+from shopping_agent.providers.openrouter import OpenRouterError, OpenRouterResponse
+from shopping_agent.retrieval.catalog import CatalogIndex
+from shopping_agent.retrieval.query import QueryBuilder
+from shopping_agent.retrieval.semantic import (
+    DenseProductRetriever,
+    embedding_query_document,
+    weighted_rrf,
+)
 
 
 def write_catalog(directory: str) -> Path:
@@ -75,6 +81,73 @@ class StateTest(unittest.TestCase):
         superseded = {item.value for item in state.superseded_constraints}
         self.assertEqual(active, {"leather", "color: black"})
         self.assertEqual(superseded, {"Warm fleece lining"})
+
+    def test_marks_information_exhausted_after_other_has_no_answer(self) -> None:
+        state = SessionState(user_profile={})
+        ingest_message(
+            state,
+            "I don't have an additional preference for other.",
+            turn=2,
+        )
+        self.assertTrue(state.information_exhausted)
+
+
+class FakeIntentClient:
+    def classify_shopping_intent(self, model: str, message: str) -> OpenRouterResponse:
+        return OpenRouterResponse(
+            payload={
+                "choices": [{
+                    "message": {
+                        "content": json.dumps({
+                            "intent": "buying",
+                            "confidence": 0.86,
+                            "reason": "concrete upcoming need",
+                        })
+                    }
+                }]
+            },
+            prompt_tokens=12,
+            completion_tokens=8,
+        )
+
+
+class IntentTest(unittest.TestCase):
+    def test_rules_handle_fixed_evaluator_language(self) -> None:
+        classifier = HybridIntentClassifier()
+        buying = classifier.classify(
+            "I'm looking for Shoes. A key requirement is: leather.", 1
+        )
+        browsing = classifier.classify(
+            "I'm looking for Shoes, but I'm still exploring.", 1
+        )
+        self.assertEqual((buying.mode, buying.source), ("buying", "rule"))
+        self.assertEqual((browsing.mode, browsing.source), ("browsing", "rule"))
+
+    def test_unclear_language_uses_optional_llm(self) -> None:
+        classifier = HybridIntentClassifier(FakeIntentClient(), "fake-model")
+        decision = classifier.classify("I have a trip coming up and need some ideas.", 1)
+        self.assertEqual(decision.mode, "buying")
+        self.assertEqual(decision.source, "llm")
+        self.assertEqual(decision.prompt_tokens, 12)
+
+
+class ClarificationPolicyTest(unittest.TestCase):
+    def test_profile_and_known_constraints_produce_focused_compatible_question(self) -> None:
+        state = SessionState(
+            user_profile={"preference_tags": ["material", "fit"]},
+            intent_mode="buying",
+        )
+        state.constraints.append(Constraint("cotton", "material", 1, "user"))
+        plan = ClarificationPolicy().plan(state, 1, [])
+        self.assertEqual(plan.ask_attribute, "other")
+        self.assertNotEqual(plan.focus_attribute, "material")
+        self.assertTrue(plan.topics)
+
+    def test_exhausted_state_stops_asking(self) -> None:
+        state = SessionState(user_profile={}, information_exhausted=True)
+        plan = ClarificationPolicy().plan(state, 3, [])
+        self.assertIsNone(plan.ask_attribute)
+        self.assertTrue(plan.information_exhausted)
 
 
 class QueryTest(unittest.TestCase):
@@ -307,6 +380,7 @@ class AgentTest(unittest.TestCase):
             self.assertTrue(second_ids)
             self.assertTrue(first_ids.isdisjoint(second_ids))
             self.assertTrue(agent.get_diagnostics("rotation")["candidate_rotation_active"])
+            self.assertTrue(agent.get_diagnostics("rotation")["information_exhausted"])
 
 
 if __name__ == "__main__":

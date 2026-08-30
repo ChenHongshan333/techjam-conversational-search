@@ -4,10 +4,10 @@ import argparse
 from dataclasses import replace
 from pathlib import Path
 
-from .catalog import CatalogIndex
 from .config import RetrievalSettings
-from .openrouter import OpenRouterClient
-from .semantic import DenseProductRetriever
+from .providers.openrouter import OpenRouterClient
+from .retrieval.catalog import CatalogIndex
+from .retrieval.semantic import DenseProductRetriever
 
 
 def main() -> None:

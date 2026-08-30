@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from .models import Constraint, SessionState
+from ..models import Constraint, SessionState
+from ..text import classify_constraint, normalize
 from .parser import parse_message
-from .text import classify_constraint, normalize
 
 
 def ingest_message(
@@ -24,6 +24,8 @@ def ingest_message(
         state.boundary_observed = True
     elif parsed.rejected_attribute:
         state.rejected_attributes.add(parsed.rejected_attribute)
+        if parsed.rejected_attribute == "other":
+            state.information_exhausted = True
 
     if parsed.override:
         state.override_seen = True

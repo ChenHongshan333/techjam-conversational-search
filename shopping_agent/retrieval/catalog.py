@@ -8,8 +8,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import SessionState
-from .text import (
+from ..models import SessionState
+from ..text import (
     COLORS,
     MATERIALS,
     clean_constraint,

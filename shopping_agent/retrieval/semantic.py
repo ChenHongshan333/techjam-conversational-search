@@ -9,9 +9,9 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from ..config import RetrievalSettings
+from ..providers.openrouter import OpenRouterClient, OpenRouterError
 from .catalog import CatalogIndex, Product
-from .config import RetrievalSettings
-from .openrouter import OpenRouterClient, OpenRouterError
 
 
 INDEX_FORMAT_VERSION = 1

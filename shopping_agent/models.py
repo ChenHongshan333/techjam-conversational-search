@@ -38,6 +38,13 @@ class SessionState:
     last_query_signature: tuple[str, ...] | None = None
     initial_preference: str | None = None
     override_seen: bool = False
+    intent_mode: str = "uncertain"
+    intent_confidence: float = 0.0
+    intent_source: str = "default"
+    information_exhausted: bool = False
+    last_question_focus: str | None = None
+    asked_question_focuses: list[str] = field(default_factory=list)
+    question_topics: list[str] = field(default_factory=list)
 
     @property
     def active_constraints(self) -> list[Constraint]:

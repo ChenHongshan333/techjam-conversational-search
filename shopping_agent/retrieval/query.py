@@ -4,8 +4,8 @@ import json
 import re
 from dataclasses import dataclass, replace
 
-from .models import SessionState
-from .openrouter import OpenRouterClient, OpenRouterError
+from ..models import SessionState
+from ..providers.openrouter import OpenRouterClient, OpenRouterError
 
 
 NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
