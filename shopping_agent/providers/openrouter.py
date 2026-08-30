@@ -115,6 +115,101 @@ class OpenRouterClient:
             "max_tokens": 180,
         })
 
+    def classify_shopping_intent(self, model: str, message: str) -> OpenRouterResponse:
+        schema = {
+            "name": "shopping_intent",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "intent": {
+                        "type": "string",
+                        "enum": ["buying", "browsing", "uncertain"],
+                    },
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                    "reason": {"type": "string", "maxLength": 160},
+                },
+                "required": ["intent", "confidence", "reason"],
+                "additionalProperties": False,
+            },
+        }
+        prompt = (
+            "Classify the customer's current shopping mode. Buying means they have a concrete "
+            "product goal, requirement, deadline, or purchase use case. Browsing means they are "
+            "open-endedly exploring. Use uncertain when the message does not support either. "
+            "Do not infer intent from demographics or invent missing needs.\n\n"
+            f"Customer message: {message[:1200]}"
+        )
+        return self._post("chat/completions", {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You classify shopping intent conservatively."},
+                {"role": "user", "content": prompt},
+            ],
+            "reasoning": {"effort": "none"},
+            "response_format": {"type": "json_schema", "json_schema": schema},
+            "temperature": 0,
+            "max_tokens": 120,
+        })
+
+    def extract_shopping_answer(
+        self,
+        model: str,
+        message: str,
+        current_category: str,
+        question_focus: str,
+    ) -> OpenRouterResponse:
+        schema = {
+            "name": "shopping_answer",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "category": {"type": "string", "maxLength": 120},
+                    "constraints": {
+                        "type": "array",
+                        "maxItems": 4,
+                        "items": {"type": "string", "maxLength": 180},
+                    },
+                    "rejected_attribute": {
+                        "type": "string",
+                        "enum": [
+                            "", "category", "material", "color", "size", "style",
+                            "brand", "budget", "feature", "use_case", "other",
+                        ],
+                    },
+                    "override": {"type": "boolean"},
+                    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
+                },
+                "required": [
+                    "category", "constraints", "rejected_attribute", "override", "confidence",
+                ],
+                "additionalProperties": False,
+            },
+        }
+        prompt = (
+            "Extract only shopping information explicitly stated by the customer. Keep concrete "
+            "product wording such as recipient text, sleeve style, occasion, material, size, "
+            "brand, colour, and budget. Do not infer a preference from demographics or profile. "
+            "Set override only when the customer replaces an earlier preference. If the customer "
+            "declines the asked dimension, return it as rejected_attribute. Use empty values when "
+            "nothing useful is stated.\n\n"
+            f"Current category: {current_category or 'unspecified'}\n"
+            f"Question focus: {question_focus or 'unspecified'}\n"
+            f"Customer message: {message[:1200]}"
+        )
+        return self._post("chat/completions", {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You extract grounded shopping constraints."},
+                {"role": "user", "content": prompt},
+            ],
+            "reasoning": {"effort": "none"},
+            "response_format": {"type": "json_schema", "json_schema": schema},
+            "temperature": 0,
+            "max_tokens": 260,
+        })
+
     def embeddings(
         self,
         model: str,

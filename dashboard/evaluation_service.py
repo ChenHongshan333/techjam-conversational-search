@@ -20,7 +20,7 @@ class EvaluationService:
         self,
         catalog_path: str | Path = "data/catalog.jsonl",
         dataset_path: str | Path = "data/public_set.jsonl",
-        artifact_path: str | Path = "artifacts/latest_evaluation.json",
+        artifact_path: str | Path = "artifacts/evaluation_clarification_policy.json",
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.dataset_path = Path(dataset_path)

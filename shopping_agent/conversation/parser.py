@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import re
 
-from .models import ParsedMessage
-from .text import clean_constraint
+from ..models import ParsedMessage
+from ..text import clean_constraint
 
 
 BUYING_RE = re.compile(

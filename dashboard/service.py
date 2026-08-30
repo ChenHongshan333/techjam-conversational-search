@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 
 from evaluator.local_evaluator import load_jsonl
-from shopping_agent.agent import ShoppingAgent
+from shopping_agent import ShoppingAgent
 
 from .session_runner import ReplaySession
 

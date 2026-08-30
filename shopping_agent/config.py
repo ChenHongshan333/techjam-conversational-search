@@ -31,12 +31,18 @@ def _enabled(name: str, default: bool = False) -> bool:
 @dataclass(frozen=True)
 class RetrievalSettings:
     api_key: str
+    answer_enabled: bool
+    intent_enabled: bool
     rewrite_enabled: bool
     dense_enabled: bool
     rerank_enabled: bool
     rewrite_model: str
     embedding_model: str
     rerank_model: str
+    answer_model: str
+    intent_model: str
+    answer_confidence_threshold: float
+    intent_confidence_threshold: float
     embedding_dimensions: int
     embedding_batch_size: int
     embedding_workers: int
@@ -58,12 +64,22 @@ class RetrievalSettings:
         semantic_index_value = os.environ.get("TECHJAM_SEMANTIC_INDEX_PATH", "").strip()
         return cls(
             api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
+            answer_enabled=_enabled("TECHJAM_LLM_ANSWER"),
+            intent_enabled=_enabled("TECHJAM_LLM_INTENT"),
             rewrite_enabled=_enabled("TECHJAM_LLM_REWRITE"),
             dense_enabled=_enabled("TECHJAM_DENSE_RETRIEVAL"),
             rerank_enabled=_enabled("TECHJAM_RERANK"),
             rewrite_model=os.environ.get("TECHJAM_REWRITE_MODEL", "openai/gpt-5.6-luna"),
             embedding_model=os.environ.get("TECHJAM_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
             rerank_model=os.environ.get("TECHJAM_RERANK_MODEL", "qwen/qwen3-reranker-8b"),
+            answer_model=os.environ.get("TECHJAM_ANSWER_MODEL", "openai/gpt-5.6-luna"),
+            intent_model=os.environ.get("TECHJAM_INTENT_MODEL", "openai/gpt-5.6-luna"),
+            answer_confidence_threshold=float(
+                os.environ.get("TECHJAM_ANSWER_CONFIDENCE_THRESHOLD", "0.65")
+            ),
+            intent_confidence_threshold=float(
+                os.environ.get("TECHJAM_INTENT_CONFIDENCE_THRESHOLD", "0.65")
+            ),
             embedding_dimensions=int(os.environ.get("TECHJAM_EMBEDDING_DIMENSIONS", "512")),
             embedding_batch_size=int(os.environ.get("TECHJAM_EMBEDDING_BATCH_SIZE", "64")),
             embedding_workers=int(os.environ.get("TECHJAM_EMBEDDING_WORKERS", "2")),
@@ -95,5 +111,9 @@ class RetrievalSettings:
     @property
     def remote_enabled(self) -> bool:
         return bool(self.api_key) and (
-            self.rewrite_enabled or self.dense_enabled or self.rerank_enabled
+            self.answer_enabled
+            or self.intent_enabled
+            or self.rewrite_enabled
+            or self.dense_enabled
+            or self.rerank_enabled
         )

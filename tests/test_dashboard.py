@@ -7,7 +7,7 @@ from pathlib import Path
 
 from dashboard.service import DashboardService
 from dashboard.session_runner import ReplaySession
-from shopping_agent.agent import ShoppingAgent
+from shopping_agent import ShoppingAgent
 
 
 PRODUCTS = [

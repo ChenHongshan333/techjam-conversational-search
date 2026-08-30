@@ -8,8 +8,8 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from .models import SessionState
-from .text import (
+from ..models import SessionState
+from ..text import (
     COLORS,
     MATERIALS,
     clean_constraint,
@@ -254,7 +254,8 @@ class CatalogIndex:
             route_bonus[parent_asin] += 60.0 / (60.0 + rank)
         for rank, parent_asin in enumerate(broad_ranked, start=1):
             route_bonus[parent_asin] += 60.0 / (60.0 + rank)
-        profile_terms = set(terms(" ".join(state.user_profile.get("preference_tags") or []), limit=12))
+        profile_terms = set(terms(" ".join(state.profile_preferences), limit=12))
+        avoidance_terms = set(terms(" ".join(state.profile_avoidances), limit=12))
         def legacy_score(parent_asin: str) -> tuple[float, str]:
             product = self.products[parent_asin]
             exact = exact_counts[parent_asin]
@@ -262,6 +263,10 @@ class CatalogIndex:
             profile_coverage = (
                 sum(term in product.search_text for term in profile_terms) / len(profile_terms)
                 if profile_terms else 0.0
+            )
+            avoidance_coverage = (
+                sum(term in product.search_text for term in avoidance_terms) / len(avoidance_terms)
+                if avoidance_terms else 0.0
             )
             quality_prior = 0.20 * math.log1p(product.rating_number) + 0.03 * product.average_rating
             value = (
@@ -271,6 +276,7 @@ class CatalogIndex:
                 + 2.0 * route_bonus[parent_asin]
                 + 1.5 * category_coverage(parent_asin)
                 + 0.15 * profile_coverage
+                - 0.25 * avoidance_coverage
                 + quality_prior
             )
             return value, parent_asin
