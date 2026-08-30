@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Track 04 / Agent Console</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <div>
+      <p class="eyebrow">TIKTOK TECHJAM · TRACK 04</p>
+      <h1>Agent Console</h1>
+    </div>
+    <div class="header-status">
+      <span class="status-dot" aria-hidden="true"></span>
+      <span>LOCAL / OFFLINE</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="score-section" aria-labelledby="score-heading">
+      <div class="section-heading">
+        <div>
+          <p class="section-index">01</p>
+          <h2 id="score-heading">Evaluation</h2>
+        </div>
+        <div class="action-row">
+          <span id="evaluation-status" class="muted">No evaluation running</span>
+          <button id="run-evaluation" class="button button-dark">Run 200 cases</button>
+        </div>
+      </div>
+
+      <div class="metric-grid">
+        <article class="metric-card metric-primary">
+          <span>Technical score</span>
+          <strong id="metric-score">—</strong>
+          <small id="metric-score-delta">Run evaluation to calculate</small>
+        </article>
+        <article class="metric-card">
+          <span>Hit Rate @ 10</span>
+          <strong id="metric-hit">—</strong>
+          <small id="metric-hit-baseline">Baseline —</small>
+        </article>
+        <article class="metric-card">
+          <span>MRR</span>
+          <strong id="metric-mrr">—</strong>
+          <small id="metric-mrr-baseline">Baseline —</small>
+        </article>
+        <article class="metric-card">
+          <span>MTTC</span>
+          <strong id="metric-mttc">—</strong>
+          <small id="metric-mttc-baseline">Baseline —</small>
+        </article>
+      </div>
+
+      <div class="scenario-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th>Cases</th>
+              <th>Hit @ 10</th>
+              <th>MRR</th>
+              <th>MTTC</th>
+            </tr>
+          </thead>
+          <tbody id="scenario-table">
+            <tr><td colspan="5" class="empty-cell">Run an evaluation to see scenario metrics.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="replay-section" aria-labelledby="replay-heading">
+      <div class="section-heading replay-heading">
+        <div>
+          <p class="section-index">02</p>
+          <h2 id="replay-heading">Test replay</h2>
+        </div>
+        <label class="target-toggle">
+          <input type="checkbox" id="show-target">
+          <span>Reveal target</span>
+        </label>
+      </div>
+
+      <div class="test-controls">
+        <label>
+          <span>Scenario</span>
+          <select id="scenario-filter">
+            <option value="">All scenarios</option>
+            <option value="buying">Buying</option>
+            <option value="browsing">Browsing</option>
+            <option value="intent_override">Intent override</option>
+            <option value="boundary">Boundary</option>
+          </select>
+        </label>
+        <label class="case-field">
+          <span>Public test case</span>
+          <select id="case-select"></select>
+        </label>
+        <button id="start-case" class="button button-dark">Start replay</button>
+      </div>
+
+      <div id="case-meta" class="case-meta hidden"></div>
+
+      <div class="workspace">
+        <div class="conversation-panel panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-kicker">Conversation</span>
+              <strong id="turn-counter">No active replay</strong>
+            </div>
+            <div class="action-row">
+              <button id="next-turn" class="button" disabled>Next turn</button>
+              <button id="auto-run" class="button" disabled>Auto run</button>
+            </div>
+          </div>
+          <div id="conversation" class="conversation empty-state">
+            Select a public test case to inspect the agent turn by turn.
+          </div>
+        </div>
+
+        <aside class="inspector-panel panel">
+          <div class="panel-header">
+            <div>
+              <span class="panel-kicker">Inspector</span>
+              <strong>Agent state</strong>
+            </div>
+          </div>
+          <div id="session-result" class="session-result">
+            <span class="muted">No result</span>
+          </div>
+          <div class="inspector-block">
+            <span class="inspector-label">Active constraints</span>
+            <div id="active-constraints" class="tag-list"><span class="muted">None</span></div>
+          </div>
+          <div class="inspector-block">
+            <span class="inspector-label">Candidate flow</span>
+            <dl id="candidate-flow" class="data-list">
+              <div><dt>Exact</dt><dd>—</dd></div>
+              <div><dt>Intersection</dt><dd>—</dd></div>
+              <div><dt>BM25 AND</dt><dd>—</dd></div>
+              <div><dt>BM25 OR</dt><dd>—</dd></div>
+              <div><dt>Dense identity</dt><dd>—</dd></div>
+              <div><dt>Dense attributes</dt><dd>—</dd></div>
+              <div><dt>Fused</dt><dd>—</dd></div>
+            </dl>
+          </div>
+          <div class="inspector-block">
+            <span class="inspector-label">Query terms</span>
+            <p id="query-terms" class="mono muted">—</p>
+          </div>
+          <div class="inspector-block">
+            <span class="inspector-label">Semantic query</span>
+            <p id="semantic-query" class="mono muted">—</p>
+            <div id="retrieval-status" class="tag-list"></div>
+          </div>
+          <div class="inspector-block target-details hidden" id="target-details">
+            <span class="inspector-label">Hidden target</span>
+            <strong id="target-title"></strong>
+            <code id="target-asin"></code>
+          </div>
+        </aside>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <span>CONVERSATIONAL SEARCH / LOCAL DIAGNOSTICS</span>
+    <span id="footer-status">READY</span>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

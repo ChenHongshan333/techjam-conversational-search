@@ -1,0 +1,48 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Constraint:
+    value: str
+    attribute: str
+    turn: int
+    source: str
+    active: bool = True
+
+
+@dataclass
+class ParsedMessage:
+    category: str | None = None
+    constraints: list[str] = field(default_factory=list)
+    constraint_payload: str | None = None
+    override: bool = False
+    rejected_attribute: str | None = None
+    boundary_response: bool = False
+    browsing: bool = False
+
+
+@dataclass
+class SessionState:
+    user_profile: dict
+    messages: list[str] = field(default_factory=list)
+    constraints: list[Constraint] = field(default_factory=list)
+    category: str | None = None
+    browsing: bool = False
+    boundary_observed: bool = False
+    rejected_attributes: set[str] = field(default_factory=set)
+    asked_attributes: list[str] = field(default_factory=list)
+    previous_recommendations: list[str] = field(default_factory=list)
+    seen_recommendations: set[str] = field(default_factory=set)
+    last_query_signature: tuple[str, ...] | None = None
+    initial_preference: str | None = None
+    override_seen: bool = False
+
+    @property
+    def active_constraints(self) -> list[Constraint]:
+        return [constraint for constraint in self.constraints if constraint.active]
+
+    @property
+    def superseded_constraints(self) -> list[Constraint]:
+        return [constraint for constraint in self.constraints if not constraint.active]

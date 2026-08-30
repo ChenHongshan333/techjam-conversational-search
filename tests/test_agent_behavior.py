@@ -1,0 +1,313 @@
+from __future__ import annotations
+
+import json
+import tempfile
+import unittest
+from dataclasses import replace
+from pathlib import Path
+
+from shopping_agent.agent import ShoppingAgent
+from shopping_agent.catalog import CatalogIndex
+from shopping_agent.config import RetrievalSettings
+from shopping_agent.models import Constraint, SessionState
+from shopping_agent.openrouter import OpenRouterError, OpenRouterResponse
+from shopping_agent.parser import parse_message
+from shopping_agent.query import QueryBuilder
+from shopping_agent.semantic import DenseProductRetriever, embedding_query_document, weighted_rrf
+from shopping_agent.state import ingest_message
+
+
+def write_catalog(directory: str) -> Path:
+    path = Path(directory) / "catalog.jsonl"
+    products = [
+        {
+            "parent_asin": "TARGET",
+            "title": "Women's black winter boot",
+            "features": ["Genuine leather", "Warm fleece lining"],
+            "details": {"Color": "Black", "Department": "Womens"},
+            "description": ["Comfortable outdoor boot"],
+            "categories": ["Clothing", "Shoes", "Boots"],
+            "store": "Example",
+            "price": 89.0,
+        },
+        {
+            "parent_asin": "OTHER",
+            "title": "Women's blue running shoe",
+            "features": ["Breathable fabric", "Rubber sole"],
+            "details": {"Color": "Blue", "Department": "Womens"},
+            "description": ["Lightweight gym shoe"],
+            "categories": ["Clothing", "Shoes", "Athletic"],
+            "store": "Example",
+            "price": 49.0,
+        },
+    ]
+    path.write_text("".join(json.dumps(product) + "\n" for product in products), encoding="utf-8")
+    return path
+
+
+class ParserTest(unittest.TestCase):
+    def test_parses_buying_message(self) -> None:
+        parsed = parse_message("I'm looking for Shoes Boots. A key requirement is: leather.")
+        self.assertEqual(parsed.category, "Shoes Boots")
+        self.assertEqual(parsed.constraints, ["leather"])
+
+    def test_parses_multiple_revealed_constraints(self) -> None:
+        parsed = parse_message("For that, what matters is: leather; color: black.")
+        self.assertEqual(parsed.constraints, ["leather", "color: black"])
+
+    def test_parses_boundary_without_exhausting_attribute(self) -> None:
+        parsed = parse_message("I don't have a preference for other; please use your judgment.")
+        self.assertTrue(parsed.boundary_response)
+        self.assertEqual(parsed.rejected_attribute, "other")
+
+
+class StateTest(unittest.TestCase):
+    def test_override_deactivates_initial_preference_only(self) -> None:
+        state = SessionState(user_profile={})
+        ingest_message(state, "I'm looking for Shoes Boots. Warm fleece lining", turn=1)
+        ingest_message(state, "For that, what matters is: leather; color: black.", turn=2)
+        ingest_message(
+            state,
+            "Actually, ignore my earlier preference. What I need is: leather.",
+            turn=3,
+        )
+        active = {item.value for item in state.active_constraints}
+        superseded = {item.value for item in state.superseded_constraints}
+        self.assertEqual(active, {"leather", "color: black"})
+        self.assertEqual(superseded, {"Warm fleece lining"})
+
+
+class QueryTest(unittest.TestCase):
+    def test_deterministic_query_keeps_fields_and_source_values(self) -> None:
+        state = SessionState(user_profile={}, category="Women Hoodies")
+        state.constraints.extend([
+            Constraint("color: grey", "color", 1, "user"),
+            Constraint("80% Cotton, 20% Polyester", "material", 2, "user"),
+        ])
+        query = QueryBuilder().build(state)
+        self.assertIn("Product type: Women Hoodies", query.semantic_query)
+        self.assertIn("80% Cotton, 20% Polyester", query.semantic_query)
+        self.assertFalse(query.rewrite_used)
+
+    def test_weighted_rrf_rewards_agreement(self) -> None:
+        result = weighted_rrf([(1.0, ["A", "B"]), (1.0, ["B", "C"])])
+        self.assertEqual(result[0], "B")
+
+    def test_qwen_query_uses_retrieval_instruction(self) -> None:
+        value = embedding_query_document("qwen/qwen3-embedding-8b", "red cotton hoodie")
+        self.assertIn("Instruct:", value)
+        self.assertTrue(value.endswith("Query: red cotton hoodie"))
+
+
+class FakeEmbeddingClient:
+    def __init__(self, fail_on_call: int | None = None) -> None:
+        self.calls = 0
+        self.fail_on_call = fail_on_call
+
+    def embeddings(self, model: str, texts: list[str], dimensions: int, input_type: str):
+        self.calls += 1
+        if self.calls == self.fail_on_call:
+            raise OpenRouterError("simulated provider failure")
+        data = []
+        for index, text in enumerate(texts):
+            vector = [0.0] * dimensions
+            vector[(len(text) + index) % dimensions] = 1.0
+            data.append({"index": index, "embedding": vector})
+        return OpenRouterResponse(payload={"data": data}, prompt_tokens=len(texts))
+
+
+class SemanticIndexTest(unittest.TestCase):
+    def settings(self, directory: str) -> RetrievalSettings:
+        return replace(
+            RetrievalSettings.from_environment(),
+            api_key="fake",
+            embedding_model="qwen/qwen3-embedding-8b",
+            embedding_dimensions=32,
+            embedding_batch_size=1,
+            embedding_workers=1,
+            embedding_job_retries=1,
+            cache_directory=Path(directory) / "cache",
+        )
+
+    def test_missing_index_falls_back_without_starting_build(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = write_catalog(directory)
+            client = FakeEmbeddingClient()
+            retriever = DenseProductRetriever(
+                CatalogIndex(catalog_path), catalog_path, client, self.settings(directory)
+            )
+            result = retriever.search("winter boot")
+            self.assertIn("not built", result.error or "")
+            self.assertEqual(client.calls, 0)
+
+    def test_builder_resumes_completed_batches(self) -> None:
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("NumPy is optional")
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = write_catalog(directory)
+            catalog = CatalogIndex(catalog_path)
+            settings = self.settings(directory)
+            first_client = FakeEmbeddingClient(fail_on_call=2)
+            first = DenseProductRetriever(catalog, catalog_path, first_client, settings)
+            with self.assertRaises(OpenRouterError):
+                first.build_index()
+
+            resumed_client = FakeEmbeddingClient()
+            resumed = DenseProductRetriever(catalog, catalog_path, resumed_client, settings)
+            cache_path, _ = resumed.build_index()
+            self.assertTrue(cache_path.exists())
+            self.assertLess(resumed_client.calls, 4)
+
+    def test_portable_index_is_reused_when_catalog_path_changes(self) -> None:
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy is optional")
+        with tempfile.TemporaryDirectory() as directory:
+            first_directory = Path(directory) / "first"
+            second_directory = Path(directory) / "second"
+            first_directory.mkdir()
+            second_directory.mkdir()
+            first_catalog_path = write_catalog(str(first_directory))
+            second_catalog_path = write_catalog(str(second_directory))
+            settings = self.settings(directory)
+
+            first_client = FakeEmbeddingClient()
+            first = DenseProductRetriever(
+                CatalogIndex(first_catalog_path), first_catalog_path, first_client, settings
+            )
+            cache_path, _ = first.build_index()
+            self.assertEqual(
+                cache_path.name,
+                "catalog_qwen3_embedding_8b_32_v1.npz",
+            )
+            with np.load(cache_path, allow_pickle=False) as stored:
+                self.assertEqual(int(stored["format_version"].item()), 1)
+                self.assertEqual(
+                    str(stored["embedding_model"].item()),
+                    "qwen/qwen3-embedding-8b",
+                )
+                self.assertIn("catalog_fingerprint", stored.files)
+
+            second_client = FakeEmbeddingClient()
+            second = DenseProductRetriever(
+                CatalogIndex(second_catalog_path), second_catalog_path, second_client, settings
+            )
+            reused_path, tokens = second.build_index()
+            self.assertEqual(reused_path, cache_path)
+            self.assertEqual(tokens, 0)
+            self.assertEqual(second_client.calls, 0)
+
+    def test_explicit_semantic_index_path_is_respected(self) -> None:
+        try:
+            import numpy  # noqa: F401
+        except ImportError:
+            self.skipTest("NumPy is optional")
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = write_catalog(directory)
+            explicit_path = Path(directory) / "distributed" / "catalog.npz"
+            settings = replace(
+                self.settings(directory),
+                semantic_index_path=explicit_path,
+            )
+            retriever = DenseProductRetriever(
+                CatalogIndex(catalog_path), catalog_path, FakeEmbeddingClient(), settings
+            )
+            cache_path, _ = retriever.build_index()
+            self.assertEqual(cache_path, explicit_path)
+            self.assertTrue(explicit_path.exists())
+
+
+class AgentTest(unittest.TestCase):
+    def test_accumulates_constraints_and_retrieves_target(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+            agent.reset("session", {"preference_tags": ["comfort"]})
+            first = agent.respond(
+                "session",
+                "I'm looking for Shoes Boots, but I'm still exploring.",
+                turn=1,
+                top_k=10,
+            )
+            self.assertEqual(first["ask_attribute"], "other")
+
+            second = agent.respond(
+                "session",
+                "For that, what matters is: leather; color: black.",
+                turn=2,
+                top_k=10,
+            )
+            self.assertEqual(second["recommendations"][0]["parent_asin"], "TARGET")
+
+    def test_requires_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+            with self.assertRaises(RuntimeError):
+                agent.respond("missing", "hello", turn=1, top_k=10)
+
+    def test_catalog_resolves_semicolons_inside_a_single_feature(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.jsonl"
+            product = {
+                "parent_asin": "TARGET",
+                "title": "Grey Hoodie",
+                "features": [
+                    "Solid colors: 80% Cotton, 20% Polyester; Heather Grey: 78% Cotton, 22% Poly",
+                    "Imported",
+                ],
+                "details": {},
+                "categories": ["Women", "Hoodies"],
+            }
+            path.write_text(json.dumps(product) + "\n", encoding="utf-8")
+            agent = ShoppingAgent(path)
+            payload = (
+                "Solid colors: 80% Cotton, 20% Polyester; "
+                "Heather Grey: 78% Cotton, 22% Poly; Imported"
+            )
+            self.assertEqual(
+                agent.catalog.resolve_constraint_payload(payload),
+                [product["features"][0], "Imported"],
+            )
+
+    def test_rotates_unseen_candidates_after_other_is_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "catalog.jsonl"
+            products = [
+                {
+                    "parent_asin": f"ITEM{i:02d}",
+                    "title": f"Women Hoodie {i}",
+                    "features": ["cotton"],
+                    "details": {"Color": "Grey"},
+                    "categories": ["Women", "Hoodies"],
+                }
+                for i in range(15)
+            ]
+            path.write_text(
+                "".join(json.dumps(product) + "\n" for product in products),
+                encoding="utf-8",
+            )
+            agent = ShoppingAgent(path)
+            agent.reset("rotation", {"preference_tags": []})
+            first = agent.respond(
+                "rotation",
+                "I'm looking for Women Hoodies, but I'm still exploring.",
+                1,
+                10,
+            )
+            second = agent.respond(
+                "rotation",
+                "I don't have an additional preference for other.",
+                2,
+                10,
+            )
+            first_ids = {item["parent_asin"] for item in first["recommendations"]}
+            second_ids = {item["parent_asin"] for item in second["recommendations"]}
+            self.assertTrue(second_ids)
+            self.assertTrue(first_ids.isdisjoint(second_ids))
+            self.assertTrue(agent.get_diagnostics("rotation")["candidate_rotation_active"])
+
+
+if __name__ == "__main__":
+    unittest.main()
