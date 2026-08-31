@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import tempfile
 import unittest
@@ -808,3 +809,158 @@ class IntentRoutingTest(unittest.TestCase):
             state = agent.sessions["o"]
             self.assertTrue(state.override_seen)
             self.assertEqual(state.intent_mode, "buying")
+
+
+class RetractedSlotTest(unittest.TestCase):
+    """A retracted preference is weak evidence, never a live requirement."""
+
+    def test_strict_erasure_is_the_default(self) -> None:
+        # The brief specifies slot erasure, so a retracted slot contributes
+        # nothing by default. Retention is available but opt-in.
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        self.assertEqual(agent.settings.retracted_weight, 0.0)
+        self.assertEqual(agent.catalog.retracted_weight, 0.0)
+
+    def test_retracted_slot_never_counts_as_a_live_constraint(self) -> None:
+        # It must not enter the intersection or the coverage denominator, or a
+        # product could look like it satisfies a requirement the customer dropped.
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = CatalogIndex(write_catalog(directory), retracted_weight=0.25)
+            state = SessionState(user_profile={})
+            state.category = "Boots"
+            live = Constraint("Genuine leather", "material", 2, "answer")
+            dropped = Constraint("Warm fleece lining", "feature", 1, "stated")
+            dropped.active = False
+            state.constraints.extend([live, dropped])
+            self.assertEqual(len(state.active_constraints), 1)
+            self.assertEqual(len(state.superseded_constraints), 1)
+            _, diagnostics = catalog.retrieve_with_diagnostics(state, limit=10)
+            # One live slot only, regardless of the retained retracted one.
+            self.assertLessEqual(diagnostics["intersection_candidate_count"],
+                                 len(catalog.constraint_index["genuine leather"]))
+
+    def test_zero_weight_restores_strict_erasure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = CatalogIndex(write_catalog(directory), retracted_weight=0.0)
+        self.assertEqual(catalog.retracted_weight, 0.0)
+
+
+class DynamicTruncationTest(unittest.TestCase):
+    """Each route's cut scales to evidence strength and to the active track."""
+
+    def scale(self, **kwargs):
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = CatalogIndex(write_catalog(directory), dynamic_truncation=True, **kwargs)
+        return catalog
+
+    def test_no_exact_evidence_widens_the_cut(self) -> None:
+        depth = self.scale()._truncation_scale(evidence=0, intent_mode="uncertain")
+        self.assertGreater(depth(800), 800)
+
+    def test_strong_exact_evidence_tightens_the_cut(self) -> None:
+        catalog = self.scale(truncation_strong_evidence=50)
+        depth = catalog._truncation_scale(evidence=200, intent_mode="uncertain")
+        self.assertLess(depth(800), 800)
+
+    def test_buying_cuts_tighter_than_browsing(self) -> None:
+        catalog = self.scale()
+        buying = catalog._truncation_scale(evidence=10, intent_mode="buying")
+        browsing = catalog._truncation_scale(evidence=10, intent_mode="browsing")
+        self.assertLess(buying(800), browsing(800))
+
+    def test_never_cuts_below_the_floor(self) -> None:
+        catalog = self.scale(truncation_floor=100, truncation_strong_evidence=1)
+        depth = catalog._truncation_scale(evidence=999, intent_mode="buying")
+        self.assertGreaterEqual(depth(10), 100)
+
+    def test_disabled_reproduces_the_constant_cuts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = CatalogIndex(write_catalog(directory), dynamic_truncation=False)
+        depth = catalog._truncation_scale(evidence=0, intent_mode="buying")
+        self.assertEqual(depth(800), 800)
+
+
+class OverloadCutoffTest(unittest.TestCase):
+    """The over-generality cutoff is implemented but off by default: measured at
+    hit rate 0.985-0.990 against 1.000, so it costs the metric it must protect."""
+
+    def build(self, threshold: int) -> ShoppingAgent:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        agent.settings = replace(
+            agent.settings, suppression_enabled=True, suppression_turns=2,
+            suppression_max_turns=3, suppression_reserve_turns=3,
+            overload_threshold=threshold,
+        )
+        return agent
+
+    def test_disabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        self.assertEqual(agent.settings.overload_threshold, 0)
+        self.assertFalse(agent._suppress(SessionState(user_profile={}), 3, pool_size=99999))
+
+    def test_fires_past_the_turn_floor_when_the_pool_is_overloaded(self) -> None:
+        agent = self.build(threshold=2000)
+        state = SessionState(user_profile={})
+        self.assertTrue(agent._suppress(state, 3, pool_size=2500))
+        self.assertFalse(agent._suppress(state, 3, pool_size=1500))
+
+    def test_still_bound_by_the_closing_reserve(self) -> None:
+        agent = self.build(threshold=2000)
+        state = SessionState(user_profile={})
+        self.assertFalse(agent._suppress(state, 9, pool_size=99999))
+
+
+class ConstraintLockTest(unittest.TestCase):
+    """Buying locks hard constraints: all-satisfying products outrank partial ones.
+
+    The lock is enabled by default and is currently score-neutral, because the
+    +4.0 intersection bonus in the scorer already sorts all-satisfying products
+    first. It ships anyway: it turns an emergent property of one weight into a
+    guaranteed ordering that survives any future reweighting.
+    """
+
+    def build(self, **kwargs) -> CatalogIndex:
+        with tempfile.TemporaryDirectory() as directory:
+            return CatalogIndex(write_catalog(directory), **kwargs)
+
+    def state(self, intent: str) -> SessionState:
+        state = SessionState(user_profile={}, intent_mode=intent)
+        state.category = "Boots"
+        state.constraints.append(Constraint("Genuine leather", "material", 1, "stated"))
+        return state
+
+    def test_enabled_by_default_for_the_buying_track(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        self.assertTrue(agent.settings.constraint_lock)
+        self.assertIn("buying", agent.settings.lock_tracks)
+
+    def test_all_satisfying_products_are_ranked_first(self) -> None:
+        catalog = self.build(constraint_lock=True)
+        state = self.state("buying")
+        ranked, diagnostics = catalog.retrieve_with_diagnostics(state, limit=50)
+        if not diagnostics["constraint_lock_active"]:
+            self.skipTest("fixture produced no intersection")
+        satisfying = catalog.constraint_index["genuine leather"]
+        prefix = list(itertools.takewhile(lambda item: item in satisfying, ranked))
+        self.assertTrue(
+            all(item not in satisfying for item in ranked[len(prefix):]),
+            "a partial match was ranked above an all-satisfying product",
+        )
+
+    def test_the_non_matching_tail_survives(self) -> None:
+        # Strict precedence, not deletion -- rotation and exploration need a tail.
+        locked = self.build(constraint_lock=True)
+        unlocked = self.build(constraint_lock=False)
+        state = self.state("buying")
+        a, _ = locked.retrieve_with_diagnostics(state, limit=1000)
+        b, _ = unlocked.retrieve_with_diagnostics(state, limit=1000)
+        self.assertEqual(set(a), set(b), "the lock must reorder, never drop candidates")
+
+    def test_other_tracks_are_untouched_by_default(self) -> None:
+        catalog = self.build(constraint_lock=True, lock_tracks=("buying",))
+        _, diagnostics = catalog.retrieve_with_diagnostics(self.state("browsing"), limit=50)
+        self.assertFalse(diagnostics["constraint_lock_active"])

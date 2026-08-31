@@ -25,6 +25,12 @@ class ShoppingAgent:
             catalog_path,
             self.settings.slot_decay,
             self.settings.intent_routing_scale,
+            self.settings.retracted_weight,
+            self.settings.constraint_lock,
+            self.settings.lock_tracks,
+            self.settings.dynamic_truncation,
+            self.settings.truncation_strong_evidence,
+            self.settings.truncation_floor,
         )
         client = (
             OpenRouterClient(self.settings.api_key, self.settings.request_timeout_seconds)
@@ -205,7 +211,11 @@ class ShoppingAgent:
             state.asked_question_focuses.append(question_plan.focus_attribute)
             state.question_topics = list(question_plan.topics)
         self.last_pool[session_id] = list(ranked_pool)
-        suppressed = self._suppress(state, turn)
+        suppressed = self._suppress(
+            state, turn, retrieval_diagnostics.get("fused_candidate_count", 0)
+        )
+        if suppressed and turn > self.settings.suppression_turns:
+            state.overload_cutoffs += 1
         if suppressed:
             # Withhold this turn's list so the session spends the turn gathering
             # a constraint instead of converting at a rank the evidence does not
@@ -265,6 +275,7 @@ class ShoppingAgent:
             "seen_recommendation_count": len(state.seen_recommendations),
             "fused_pool_size": len(ranked_pool),
             "recommendations_suppressed": suppressed,
+            "overload_cutoffs": state.overload_cutoffs,
             "suppressed_turns": state.suppressed_turns,
             "gained_information": state.gained_information,
             **semantic_diagnostics,
@@ -284,7 +295,7 @@ class ShoppingAgent:
             },
         }
 
-    def _suppress(self, state: SessionState, turn: int) -> bool:
+    def _suppress(self, state: SessionState, turn: int, pool_size: int = 0) -> bool:
         """Decide whether to withhold this turn's recommendations.
 
         Withholding the opening turns lets a session convert on accumulated
@@ -309,7 +320,17 @@ class ShoppingAgent:
         # on how deep a particular session's intent card happens to be.
         if state.information_exhausted or "other" in state.rejected_attributes:
             return False
-        return turn <= settings.suppression_turns
+        if turn <= settings.suppression_turns:
+            return True
+        # Over-generality cutoff: the candidate pool is still overloaded, so the
+        # ranking is not yet worth acting on. Cut retrieval short for one more
+        # turn and spend it on a clarification instead. Gated by the same cap and
+        # reserve as the opening turns, so an overloaded session can never talk
+        # itself past the point where it must emit.
+        return (
+            settings.overload_threshold > 0
+            and pool_size >= settings.overload_threshold
+        )
 
     def get_diagnostics(self, session_id: str) -> dict:
         return dict(self.diagnostics.get(session_id) or {})

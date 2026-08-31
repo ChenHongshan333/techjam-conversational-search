@@ -81,10 +81,22 @@ class CatalogIndex:
         catalog_path: str | Path,
         slot_decay: float = 1.0,
         intent_routing_scale: float = 0.0,
+        retracted_weight: float = 0.0,
+        constraint_lock: bool = False,
+        lock_tracks: tuple[str, ...] = ("buying",),
+        dynamic_truncation: bool = False,
+        truncation_strong_evidence: int = 50,
+        truncation_floor: int = 100,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.slot_decay = slot_decay
         self.intent_routing_scale = intent_routing_scale
+        self.retracted_weight = retracted_weight
+        self.constraint_lock = constraint_lock
+        self.lock_tracks = lock_tracks
+        self.dynamic_truncation = dynamic_truncation
+        self.truncation_strong_evidence = truncation_strong_evidence
+        self.truncation_floor = truncation_floor
         self.products: dict[str, Product] = {}
         self.constraint_index: dict[str, set[str]] = defaultdict(set)
         self.connection = sqlite3.connect(":memory:")
@@ -205,6 +217,22 @@ class CatalogIndex:
             return []
         return [str(row[0]) for row in rows]
 
+    def _truncation_scale(self, evidence: int, intent_mode: str):
+        """Return a function scaling each route's base cut to evidence strength."""
+        if not self.dynamic_truncation:
+            return lambda base: base
+        if evidence == 0:
+            factor = 1.5
+        elif evidence >= self.truncation_strong_evidence:
+            factor = 0.5
+        else:
+            factor = 1.0
+        if intent_mode == "buying":
+            factor *= 0.85
+        elif intent_mode == "browsing":
+            factor *= 1.15
+        return lambda base: max(self.truncation_floor, int(base * factor))
+
     def retrieve(self, state: SessionState, limit: int = 10) -> list[str]:
         ranked, _ = self.retrieve_with_diagnostics(state, limit=limit)
         return ranked
@@ -223,14 +251,31 @@ class CatalogIndex:
         ]
         indexed_sets = [identifiers for _, identifiers in indexed]
 
+        # A retracted preference is weak evidence, not counter-evidence: the
+        # customer stopped requiring it, they did not say the product lacks it.
+        # It contributes to the exact-match signal at a reduced weight but never
+        # to the intersection or the coverage denominator, so it can only break
+        # ties -- it cannot make a product look like it satisfies a live slot.
+        retracted = []
+        if self.retracted_weight > 0.0:
+            retracted = [
+                (item, self.constraint_index[normalize(item.value)])
+                for item in state.superseded_constraints
+                if normalize(item.value) in self.constraint_index
+            ]
+
         # Slot decay: a constraint stated later is worth more than an earlier
         # one, so a customer who changes direction is followed rather than
         # averaged against their opening statement. decay == 1.0 weights every
         # slot equally, which is the pre-decay behaviour.
-        latest_turn = max((item.turn for item, _ in indexed), default=0)
+        latest_turn = max((item.turn for item, _ in indexed + retracted), default=0)
         exact_counts: Counter[str] = Counter()
         for item, identifiers in indexed:
             weight = self.slot_decay ** max(0, latest_turn - item.turn)
+            for parent_asin in identifiers:
+                exact_counts[parent_asin] += weight
+        for item, identifiers in retracted:
+            weight = self.retracted_weight * self.slot_decay ** max(0, latest_turn - item.turn)
             for parent_asin in identifiers:
                 exact_counts[parent_asin] += weight
 
@@ -251,10 +296,17 @@ class CatalogIndex:
         balanced_weights = (0.0, 7.0, 6.0, 4.0, 3.0, 1.5, 1.0)
         identity_weights = (0.0, 9.0, 7.0, 0.5, 0.5, 3.0, 0.25)
         attribute_weights = (0.0, 1.0, 1.0, 8.0, 7.0, 0.5, 3.0)
-        strict_ranked = self._fts(strict_terms, "AND", 300, balanced_weights)
-        identity_ranked = self._fts(identity_terms, "OR", 600, identity_weights)
-        attribute_ranked = self._fts(attribute_terms, "OR", 600, attribute_weights)
-        broad_ranked = self._fts(query_terms, "OR", 800, balanced_weights)
+        # Custom dynamic truncation: cut each route to the strength of the
+        # evidence rather than to a constant. A large exact-match intersection
+        # means the constraints already identify the product, so a deep tail only
+        # adds noise; no intersection at all means the tail is the only place the
+        # target can be, so widen. Buying tightens further, browsing loosens --
+        # the same precision/recall split the tracks apply to weighting.
+        depth = self._truncation_scale(len(intersection), state.intent_mode)
+        strict_ranked = self._fts(strict_terms, "AND", depth(300), balanced_weights)
+        identity_ranked = self._fts(identity_terms, "OR", depth(600), identity_weights)
+        attribute_ranked = self._fts(attribute_terms, "OR", depth(600), attribute_weights)
+        broad_ranked = self._fts(query_terms, "OR", depth(800), balanced_weights)
 
         category_terms = set(terms(state.category or "", limit=12))
         def category_coverage(parent_asin: str) -> float:
@@ -373,12 +425,28 @@ class CatalogIndex:
             )
 
         ranked = sorted(candidates, key=score, reverse=True)
+
+        # High-precision filter track. On the buying track a disclosed constraint
+        # is a hard requirement, so products satisfying every one of them are
+        # locked above products satisfying only some. Strict precedence rather
+        # than deletion: the non-matching tail stays below, so exhaustion
+        # rotation and facet exploration keep something to work with, and a
+        # target outside the intersection is demoted rather than lost.
+        locked = False
+        if self.constraint_lock and intersection and track in self.lock_tracks:
+            satisfying = [item for item in ranked if item in intersection]
+            if satisfying:
+                ranked = satisfying + [item for item in ranked if item not in intersection]
+                locked = True
+
         # Separation between the best and second-best fused candidate. A wide
         # margin means one product dominates the evidence; a narrow one means the
         # disclosed constraints do not yet distinguish the leaders.
         top1 = rrf_scores[ranked[0]] if ranked else 0.0
         top2 = rrf_scores[ranked[1]] if len(ranked) > 1 else 0.0
         return ranked[:limit], {
+            "constraint_lock_active": locked,
+            "constraint_lock_size": len(intersection) if locked else 0,
             "exact_candidate_count": len(exact_counts),
             "intersection_candidate_count": len(intersection),
             "bm25_and_candidate_count": len(strict_ranked),
