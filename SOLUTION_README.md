@@ -15,9 +15,10 @@ Validated on all 200 public sessions:
 | Structured lexical agent | 0.995 | 0.741480 | 2.055 | 0.898844 |
 | Clarification + facet exploration (offline) | 1.000 | 0.739940 | 2.035 | 0.901282 |
 | Qwen8B dense hybrid | 0.995 | 0.744899 | 2.055 | 0.899870 |
-| **+ early-conversion suppression (shipped)** | **1.000** | **0.933034** | **3.120** | **0.937510** |
+| + early-conversion suppression | 1.000 | 0.933034 | 3.120 | 0.937510 |
+| **+ dual-track intent routing (shipped)** | **1.000** | **0.937200** | **3.120** | **0.938760** |
 
-The shipped deterministic path finds 200/200 targets, 179 of them at rank 1.
+The shipped deterministic path finds 200/200 targets, 180 of them at rank 1.
 Facet-diverse exploration recovers the formerly missed ambiguous item without
 changing the evaluator. The largest single gain came from withholding the
 opening turns' recommendations so a session converts on accumulated evidence
@@ -25,8 +26,9 @@ rather than on turn 1 -- see `docs/suppression_results.md`.
 
 Semantic reranking was measured against the Anthropic API and **lowers** ranking
 quality (reciprocal rank 0.827 -> 0.760), so it stays disabled; see
-`docs/phase1_results.md`. The dense row records the earlier ablation and has not
-been rerun on top of the current policy.
+`docs/phase1_results.md`. Buying and browsing route through different retrieval
+weightings; see `docs/intent_routing_results.md`. The dense row records the
+earlier ablation and has not been rerun on top of the current policy.
 
 ## Architecture
 

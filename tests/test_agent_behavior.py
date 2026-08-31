@@ -16,6 +16,7 @@ from shopping_agent.conversation.questions import ClarificationPolicy
 from shopping_agent.conversation.state import ingest_message
 from shopping_agent.models import Constraint, SessionState
 from shopping_agent.providers.openrouter import OpenRouterError, OpenRouterResponse
+import shopping_agent.retrieval.catalog as catalog_module
 from shopping_agent.retrieval.catalog import CatalogIndex
 from shopping_agent.retrieval.exploration import select_diverse_candidates
 from shopping_agent.retrieval.query import QueryBuilder
@@ -693,3 +694,117 @@ class RotationPrecedenceTest(unittest.TestCase):
             self.assertTrue(third["recommendations"])
             self.assertFalse(agent.get_diagnostics("s")["candidate_rotation_active"])
             self.assertEqual(third["recommendations"][0]["parent_asin"], "TARGET")
+
+
+class OverrideErasureTest(unittest.TestCase):
+    """An override must retract volunteered preferences, whatever the opener."""
+
+    def ingest(self, messages: list[str]) -> SessionState:
+        state = SessionState(user_profile={})
+        for turn, message in enumerate(messages, start=1):
+            ingest_message(state, message, turn)
+        return state
+
+    def active(self, state: SessionState) -> set[str]:
+        return {item.value.casefold() for item in state.active_constraints}
+
+    def test_erases_a_preference_stated_with_a_key_requirement_opener(self) -> None:
+        # The old rule keyed off a turn-1 string it never captured for this
+        # opener, so the superseded requirement stayed active forever.
+        state = self.ingest([
+            "I'm looking for boots. A key requirement is: suede upper.",
+            "Actually, ignore my earlier preference. What I need is: leather upper.",
+        ])
+        self.assertNotIn("suede upper", self.active(state))
+        self.assertIn("leather upper", self.active(state))
+
+    def test_erases_across_a_second_override(self) -> None:
+        state = self.ingest([
+            "I'm looking for boots. I prefer suede.",
+            "Actually, ignore my earlier preference. What I need is: leather upper.",
+            "Actually, ignore my earlier preference. What I need is: rubber sole.",
+        ])
+        self.assertNotIn("suede", self.active(state))
+        self.assertNotIn("leather upper", self.active(state))
+        self.assertIn("rubber sole", self.active(state))
+
+    def test_keeps_facts_the_customer_gave_when_asked(self) -> None:
+        # Answers to the agent's questions describe the target and survive.
+        state = self.ingest([
+            "I'm looking for boots. I prefer suede.",
+            "For that, what matters is: waterproof lining.",
+            "Actually, ignore my earlier preference. What I need is: leather upper.",
+        ])
+        self.assertNotIn("suede", self.active(state))
+        self.assertIn("waterproof lining", self.active(state))
+        self.assertIn("leather upper", self.active(state))
+
+    def test_override_in_a_browsing_session_erases_nothing_it_should_not(self) -> None:
+        state = self.ingest([
+            "I'm looking for boots, but I'm still exploring.",
+            "For that, what matters is: waterproof lining.",
+            "Actually, ignore my earlier preference. What I need is: leather upper.",
+        ])
+        self.assertIn("waterproof lining", self.active(state))
+        self.assertIn("leather upper", self.active(state))
+
+
+class SlotDecayTest(unittest.TestCase):
+    def test_later_constraints_outrank_earlier_ones(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_catalog(directory)
+            equal = CatalogIndex(path, slot_decay=1.0)
+            decayed = CatalogIndex(path, slot_decay=0.5)
+            self.assertEqual(equal.slot_decay, 1.0)
+            self.assertLess(decayed.slot_decay, 1.0)
+
+            state = SessionState(user_profile={})
+            state.constraints.append(Constraint("leather", "material", 1, "stated"))
+            state.constraints.append(Constraint("black", "color", 4, "answer"))
+            # Both indexes must still rank; decay changes weighting, not recall.
+            self.assertTrue(equal.retrieve(state, limit=5))
+            self.assertTrue(decayed.retrieve(state, limit=5))
+
+
+class IntentRoutingTest(unittest.TestCase):
+    """Intent must reach retrieval.
+
+    The classifier previously fed only a dense-retrieval branch that is off by
+    default, so forcing every mode produced byte-identical results. These tests
+    fail if that ever becomes true again.
+    """
+
+    def test_tracks_are_distinct(self) -> None:
+        buying = catalog_module.INTENT_EMPHASIS["buying"]
+        browsing = catalog_module.INTENT_EMPHASIS["browsing"]
+        uncertain = catalog_module.INTENT_EMPHASIS["uncertain"]
+        self.assertNotEqual(buying, browsing, "buying and browsing must route differently")
+        self.assertNotEqual(buying, uncertain)
+        self.assertEqual(uncertain, (1.0, 1.0, 1.0, 1.0, 1.0), "uncertain is the neutral track")
+
+    def test_routing_is_enabled_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        self.assertGreater(agent.settings.intent_routing_scale, 0.0)
+        self.assertEqual(agent.catalog.intent_routing_scale, agent.settings.intent_routing_scale)
+
+    def test_scale_zero_reduces_to_the_neutral_track(self) -> None:
+        for multiplier in catalog_module.INTENT_EMPHASIS["buying"]:
+            self.assertEqual(catalog_module.blend(multiplier, 0.0), 1.0)
+        self.assertEqual(catalog_module.blend(1.5, 1.0), 1.5)
+        self.assertAlmostEqual(catalog_module.blend(1.5, 0.5), 1.25)
+
+    def test_an_override_relaxes_to_the_neutral_track(self) -> None:
+        # Overrides rewrite the requirements, so they must not inherit buying's
+        # hard-constraint emphasis even though "what I need is" reads as buying.
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+            agent.reset("o", {})
+            agent.respond("o", "I'm looking for boots. A key requirement is: leather.", 1, 10)
+            self.assertEqual(agent.get_diagnostics("o")["intent_mode"], "buying")
+            agent.respond(
+                "o", "Actually, ignore my earlier preference. What I need is: suede.", 2, 10
+            )
+            state = agent.sessions["o"]
+            self.assertTrue(state.override_seen)
+            self.assertEqual(state.intent_mode, "buying")

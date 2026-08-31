@@ -20,8 +20,12 @@ class ShoppingAgent:
     """Stateful, offline conversational catalog retrieval agent."""
 
     def __init__(self, catalog_path: str | Path = "data/catalog.jsonl") -> None:
-        self.catalog = CatalogIndex(catalog_path)
         self.settings = RetrievalSettings.from_environment()
+        self.catalog = CatalogIndex(
+            catalog_path,
+            self.settings.slot_decay,
+            self.settings.intent_routing_scale,
+        )
         client = (
             OpenRouterClient(self.settings.api_key, self.settings.request_timeout_seconds)
             if self.settings.remote_enabled else None

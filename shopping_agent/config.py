@@ -36,6 +36,8 @@ class RetrievalSettings:
     rewrite_enabled: bool
     dense_enabled: bool
     rerank_enabled: bool
+    slot_decay: float
+    intent_routing_scale: float
     suppression_enabled: bool
     suppression_max_turns: int
     suppression_turns: int
@@ -73,6 +75,10 @@ class RetrievalSettings:
             rewrite_enabled=_enabled("TECHJAM_LLM_REWRITE"),
             dense_enabled=_enabled("TECHJAM_DENSE_RETRIEVAL"),
             rerank_enabled=_enabled("TECHJAM_RERANK"),
+            slot_decay=float(os.environ.get("TECHJAM_SLOT_DECAY", "0.9")),
+            intent_routing_scale=float(
+                os.environ.get("TECHJAM_INTENT_ROUTING_SCALE", "1.0")
+            ),
             suppression_enabled=_enabled("TECHJAM_SUPPRESSION", True),
             suppression_max_turns=int(os.environ.get("TECHJAM_SUPPRESSION_MAX_TURNS", "2")),
             suppression_turns=int(os.environ.get("TECHJAM_SUPPRESSION_TURNS", "2")),
