@@ -242,6 +242,10 @@ class CatalogIndex:
                 "bm25_and_candidate_count": 0,
                 "bm25_or_candidate_count": 0,
                 "fused_candidate_count": 0,
+                "fused_top1_score": 0.0,
+                "fused_top2_score": 0.0,
+                "fused_margin": 0.0,
+                "fused_relative_margin": 0.0,
                 "query_terms": query_terms,
                 "retrieval_routes": {},
             }
@@ -297,12 +301,21 @@ class CatalogIndex:
             )
 
         ranked = sorted(candidates, key=score, reverse=True)
+        # Separation between the best and second-best fused candidate. A wide
+        # margin means one product dominates the evidence; a narrow one means the
+        # disclosed constraints do not yet distinguish the leaders.
+        top1 = rrf_scores[ranked[0]] if ranked else 0.0
+        top2 = rrf_scores[ranked[1]] if len(ranked) > 1 else 0.0
         return ranked[:limit], {
             "exact_candidate_count": len(exact_counts),
             "intersection_candidate_count": len(intersection),
             "bm25_and_candidate_count": len(strict_ranked),
             "bm25_or_candidate_count": len(broad_ranked),
             "fused_candidate_count": len(candidates),
+            "fused_top1_score": top1,
+            "fused_top2_score": top2,
+            "fused_margin": top1 - top2,
+            "fused_relative_margin": (top1 - top2) / top1 if top1 else 0.0,
             "query_terms": query_terms,
             "retrieval_routes": {name: len(ranking) for name, _, ranking in routes},
         }

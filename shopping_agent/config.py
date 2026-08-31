@@ -36,6 +36,10 @@ class RetrievalSettings:
     rewrite_enabled: bool
     dense_enabled: bool
     rerank_enabled: bool
+    suppression_enabled: bool
+    suppression_max_turns: int
+    suppression_turns: int
+    suppression_reserve_turns: int
     rewrite_model: str
     embedding_model: str
     rerank_model: str
@@ -63,12 +67,18 @@ class RetrievalSettings:
         load_env_file(env_path)
         semantic_index_value = os.environ.get("TECHJAM_SEMANTIC_INDEX_PATH", "").strip()
         return cls(
-            api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
+            api_key=os.environ.get("CLAUDE_API_KEY", "").strip(),
             answer_enabled=_enabled("TECHJAM_LLM_ANSWER"),
             intent_enabled=_enabled("TECHJAM_LLM_INTENT"),
             rewrite_enabled=_enabled("TECHJAM_LLM_REWRITE"),
             dense_enabled=_enabled("TECHJAM_DENSE_RETRIEVAL"),
             rerank_enabled=_enabled("TECHJAM_RERANK"),
+            suppression_enabled=_enabled("TECHJAM_SUPPRESSION", True),
+            suppression_max_turns=int(os.environ.get("TECHJAM_SUPPRESSION_MAX_TURNS", "2")),
+            suppression_turns=int(os.environ.get("TECHJAM_SUPPRESSION_TURNS", "2")),
+            suppression_reserve_turns=int(
+                os.environ.get("TECHJAM_SUPPRESSION_RESERVE_TURNS", "3")
+            ),
             rewrite_model=os.environ.get("TECHJAM_REWRITE_MODEL", "openai/gpt-5.6-luna"),
             embedding_model=os.environ.get("TECHJAM_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),
             rerank_model=os.environ.get("TECHJAM_RERANK_MODEL", "qwen/qwen3-reranker-8b"),
