@@ -27,6 +27,17 @@ from shopping_agent.retrieval.semantic import (
 )
 
 
+def without_suppression(agent: "ShoppingAgent") -> "ShoppingAgent":
+    """Isolate a retrieval test from the emission policy.
+
+    Suppression deliberately withholds the first turns' lists, so a test that
+    asserts on `recommendations` would otherwise be measuring the policy rather
+    than the ranking it means to check.
+    """
+    agent.settings = replace(agent.settings, suppression_enabled=False)
+    return agent
+
+
 def write_catalog(directory: str) -> Path:
     path = Path(directory) / "catalog.jsonl"
     products = [
@@ -430,7 +441,7 @@ class SemanticIndexTest(unittest.TestCase):
 class AgentTest(unittest.TestCase):
     def test_accumulates_constraints_and_retrieves_target(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            agent = ShoppingAgent(write_catalog(directory))
+            agent = without_suppression(ShoppingAgent(write_catalog(directory)))
             agent.reset("session", {"preference_tags": ["comfort"]})
             first = agent.respond(
                 "session",
@@ -456,7 +467,7 @@ class AgentTest(unittest.TestCase):
 
     def test_natural_follow_up_changes_state_and_retrieval(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            agent = ShoppingAgent(write_catalog(directory))
+            agent = without_suppression(ShoppingAgent(write_catalog(directory)))
             agent.reset(
                 "natural",
                 {
@@ -556,7 +567,9 @@ class AgentTest(unittest.TestCase):
                 "".join(json.dumps(product) + "\n" for product in products),
                 encoding="utf-8",
             )
-            agent = ShoppingAgent(path)
+            # Rotation needs a first list to rotate away from, so the emission
+            # policy is held out of the way; suppression is covered separately.
+            agent = without_suppression(ShoppingAgent(path))
             agent.reset("rotation", {"preference_tags": []})
             first = agent.respond(
                 "rotation",
@@ -580,3 +593,103 @@ class AgentTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SuppressionRuleTest(unittest.TestCase):
+    """The rules that bound how long a session may stay silent."""
+
+    def build(self, **overrides) -> ShoppingAgent:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        defaults = {
+            "suppression_enabled": True,
+            "suppression_turns": 2,
+            "suppression_max_turns": 2,
+            "suppression_reserve_turns": 3,
+        }
+        agent.settings = replace(agent.settings, **{**defaults, **overrides})
+        return agent
+
+    def test_shipped_default_withholds_the_first_two_turns(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        self.assertTrue(agent.settings.suppression_enabled)
+        self.assertEqual(agent.settings.suppression_turns, 2)
+        state = SessionState(user_profile={})
+        self.assertTrue(agent._suppress(state, 1))
+        self.assertTrue(agent._suppress(state, 2))
+        self.assertFalse(agent._suppress(state, 3))
+
+    def test_can_be_switched_off(self) -> None:
+        agent = self.build(suppression_enabled=False)
+        self.assertFalse(agent._suppress(SessionState(user_profile={}), 1))
+
+    def test_reserves_the_closing_turns(self) -> None:
+        # The closing turns decide the 0.5-weighted hit rate and must always emit.
+        agent = self.build(suppression_turns=9, suppression_max_turns=99)
+        state = SessionState(user_profile={})
+        self.assertTrue(agent._suppress(state, 7))
+        for closing_turn in (8, 9, 10):
+            self.assertFalse(agent._suppress(state, closing_turn))
+
+    def test_respects_the_per_session_cap(self) -> None:
+        agent = self.build(suppression_turns=9, suppression_max_turns=2)
+        self.assertFalse(agent._suppress(SessionState(user_profile={}, suppressed_turns=2), 3))
+
+    def test_stops_when_the_last_question_brought_nothing_back(self) -> None:
+        agent = self.build(suppression_turns=9, suppression_max_turns=99)
+        self.assertFalse(
+            agent._suppress(SessionState(user_profile={}, gained_information=False), 3)
+        )
+
+
+class SuppressionExhaustionTest(unittest.TestCase):
+    """Suppression must yield as soon as the customer stops supplying information."""
+
+    def build(self) -> ShoppingAgent:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+        agent.settings = replace(
+            agent.settings,
+            suppression_enabled=True,
+            suppression_turns=3,
+            suppression_max_turns=9,
+            suppression_reserve_turns=3,
+        )
+        return agent
+
+    def test_yields_once_information_is_exhausted(self) -> None:
+        agent = self.build()
+        state = SessionState(user_profile={})
+        self.assertTrue(agent._suppress(state, 2))
+        state.rejected_attributes.add("other")
+        self.assertFalse(agent._suppress(state, 2))
+
+    def test_yields_on_the_explicit_exhausted_flag(self) -> None:
+        agent = self.build()
+        state = SessionState(user_profile={}, information_exhausted=True)
+        self.assertFalse(agent._suppress(state, 2))
+
+
+class RotationPrecedenceTest(unittest.TestCase):
+    """The first list a session emits must be the ranking, never an exploration set."""
+
+    def test_first_emission_is_not_diversified(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(write_catalog(directory))
+            agent.settings = replace(
+                agent.settings, suppression_enabled=True,
+                suppression_turns=3, suppression_max_turns=9,
+            )
+            agent.reset("s", {})
+            # Withheld while the customer still has information to give.
+            agent.respond("s", "I'm looking for Shoes Boots, but I'm still exploring.", 1, 10)
+            agent.respond("s", "For that, what matters is: leather; color: black.", 2, 10)
+            # Customer runs dry: suppression must yield AND the first list must be
+            # the ranking, not a diversified exploration set.
+            third = agent.respond("s", "I don't have an additional preference for other.", 3, 10)
+            state = agent.sessions["s"]
+            self.assertTrue(state.rejected_attributes)
+            self.assertTrue(third["recommendations"])
+            self.assertFalse(agent.get_diagnostics("s")["candidate_rotation_active"])
+            self.assertEqual(third["recommendations"][0]["parent_asin"], "TARGET")

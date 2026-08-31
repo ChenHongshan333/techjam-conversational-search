@@ -51,6 +51,9 @@ class ShoppingAgent:
         )
         self.sessions: dict[str, SessionState] = {}
         self.diagnostics: dict[str, dict] = {}
+        # Full fused pool from the most recent turn, kept so an offline harness
+        # can locate the target beyond the ten emitted ids. Never used to rank.
+        self.last_pool: dict[str, list[str]] = {}
 
     def reset(self, session_id: str, user_profile: dict) -> None:
         profile = distill_user_profile(user_profile)
@@ -66,6 +69,7 @@ class ShoppingAgent:
         if session_id not in self.sessions:
             raise RuntimeError("reset must be called before respond")
         state = self.sessions[session_id]
+        constraints_before = len(state.active_constraints)
         answer = self.answer_interpreter.interpret(
             user_message,
             turn,
@@ -79,6 +83,7 @@ class ShoppingAgent:
             constraint_resolver=self.catalog.resolve_constraint_payload,
             parsed=answer.parsed,
         )
+        state.gained_information = len(state.active_constraints) > constraints_before
         state.last_answer_source = answer.source
         state.last_answer_confidence = answer.confidence
         intent = self.intent_classifier.classify(
@@ -161,7 +166,15 @@ class ShoppingAgent:
             *(f"profile:{item.casefold()}" for item in state.profile_preferences),
         )
         exhausted = state.information_exhausted or "other" in state.rejected_attributes
-        rotating = exhausted and query_signature == state.last_query_signature
+        # Rotation exists to move past products already shown. With nothing shown
+        # yet there is nothing to rotate away from, and diversifying the very
+        # first list trades the precision ranking for coverage the session has
+        # not earned -- which costs the hit outright.
+        rotating = (
+            exhausted
+            and query_signature == state.last_query_signature
+            and bool(state.seen_recommendations)
+        )
         exploration_facets: tuple[str, ...] = ()
         if rotating:
             selection = select_diverse_candidates(
@@ -187,6 +200,14 @@ class ShoppingAgent:
             state.last_question_focus = question_plan.focus_attribute
             state.asked_question_focuses.append(question_plan.focus_attribute)
             state.question_topics = list(question_plan.topics)
+        self.last_pool[session_id] = list(ranked_pool)
+        suppressed = self._suppress(state, turn)
+        if suppressed:
+            # Withhold this turn's list so the session spends the turn gathering
+            # a constraint instead of converting at a rank the evidence does not
+            # yet support. The clarifying question still goes out.
+            recommendations = []
+            state.suppressed_turns += 1
         state.previous_recommendations = recommendations
         state.seen_recommendations.update(recommendations)
         state.last_query_signature = query_signature
@@ -238,6 +259,10 @@ class ShoppingAgent:
             "profile_preferences": list(state.profile_preferences),
             "profile_avoidances": list(state.profile_avoidances),
             "seen_recommendation_count": len(state.seen_recommendations),
+            "fused_pool_size": len(ranked_pool),
+            "recommendations_suppressed": suppressed,
+            "suppressed_turns": state.suppressed_turns,
+            "gained_information": state.gained_information,
             **semantic_diagnostics,
             **retrieval_diagnostics,
         }
@@ -254,6 +279,33 @@ class ShoppingAgent:
                 "completion_tokens": completion_tokens,
             },
         }
+
+    def _suppress(self, state: SessionState, turn: int) -> bool:
+        """Decide whether to withhold this turn's recommendations.
+
+        Withholding the opening turns lets a session convert on accumulated
+        evidence instead of on turn 1, which is worth far more MRR than the
+        extra turns cost in efficiency. Four rules bound it.
+        """
+        settings = self.settings
+        if not settings.suppression_enabled:
+            return False
+        # Reserve the closing turns. The 0.5-weighted hit rate is decided there,
+        # and a session that spends its last turns silent can lose a hit it had.
+        if turn > 10 - settings.suppression_reserve_turns:
+            return False
+        if state.suppressed_turns >= settings.suppression_max_turns:
+            return False
+        if turn > 1 and not state.gained_information:
+            return False
+        # Stop the moment the customer has no more information to give. Past that
+        # point the ranking cannot improve, and the first emitted list would be a
+        # diversified exploration list rather than a precision one -- which costs
+        # hit rate outright. This makes the rule self-limiting: it never depends
+        # on how deep a particular session's intent card happens to be.
+        if state.information_exhausted or "other" in state.rejected_attributes:
+            return False
+        return turn <= settings.suppression_turns
 
     def get_diagnostics(self, session_id: str) -> dict:
         return dict(self.diagnostics.get(session_id) or {})

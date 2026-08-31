@@ -49,6 +49,8 @@ class SessionState:
     profile_preferences: list[str] = field(default_factory=list)
     profile_avoidances: list[str] = field(default_factory=list)
     last_answer_source: str = "fixed"
+    suppressed_turns: int = 0
+    gained_information: bool = True
     last_answer_confidence: float = 1.0
     exploration_turns: int = 0
 

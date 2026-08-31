@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from dashboard.service import DashboardService
@@ -77,7 +78,9 @@ class DashboardServiceTest(unittest.TestCase):
             self.assertEqual(event["turn"], 1)
             self.assertEqual(event["ask_attribute"], "other")
             self.assertIn("fused_candidate_count", event["diagnostics"])
-            self.assertTrue(event["recommendations"])
+            # The shipped policy withholds the opening turns and asks instead.
+            self.assertTrue(event["diagnostics"]["recommendations_suppressed"])
+            self.assertFalse(event["recommendations"])
 
 
 class ReplaySessionTest(unittest.TestCase):
@@ -85,6 +88,9 @@ class ReplaySessionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             catalog_path, _ = write_fixture(directory, scenario="intent_override")
             agent = ShoppingAgent(catalog_path)
+            # This test is about when a hit may be scored, not about which turns
+            # emit a list, so the emission policy is held out of the way.
+            agent.settings = replace(agent.settings, suppression_enabled=False)
             sample = {
                 "sample_id": "override_test",
                 "scenario_type": "intent_override",
