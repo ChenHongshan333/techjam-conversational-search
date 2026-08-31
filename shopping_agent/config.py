@@ -38,6 +38,13 @@ class RetrievalSettings:
     rerank_enabled: bool
     slot_decay: float
     intent_routing_scale: float
+    retracted_weight: float
+    constraint_lock: bool
+    lock_tracks: tuple[str, ...]
+    dynamic_truncation: bool
+    truncation_strong_evidence: int
+    truncation_floor: int
+    overload_threshold: int
     suppression_enabled: bool
     suppression_max_turns: int
     suppression_turns: int
@@ -79,6 +86,19 @@ class RetrievalSettings:
             intent_routing_scale=float(
                 os.environ.get("TECHJAM_INTENT_ROUTING_SCALE", "1.0")
             ),
+            retracted_weight=float(os.environ.get("TECHJAM_RETRACTED_WEIGHT", "0")),
+            constraint_lock=_enabled("TECHJAM_CONSTRAINT_LOCK", True),
+            lock_tracks=tuple(
+                value.strip()
+                for value in os.environ.get("TECHJAM_LOCK_TRACKS", "buying").split(",")
+                if value.strip()
+            ),
+            dynamic_truncation=_enabled("TECHJAM_DYNAMIC_TRUNCATION", True),
+            truncation_strong_evidence=int(
+                os.environ.get("TECHJAM_TRUNCATION_STRONG_EVIDENCE", "50")
+            ),
+            truncation_floor=int(os.environ.get("TECHJAM_TRUNCATION_FLOOR", "100")),
+            overload_threshold=int(os.environ.get("TECHJAM_OVERLOAD_THRESHOLD", "0")),
             suppression_enabled=_enabled("TECHJAM_SUPPRESSION", True),
             suppression_max_turns=int(os.environ.get("TECHJAM_SUPPRESSION_MAX_TURNS", "2")),
             suppression_turns=int(os.environ.get("TECHJAM_SUPPRESSION_TURNS", "2")),
