@@ -20,6 +20,41 @@ from ..text import (
 )
 
 
+# Dual-track routing. Buying has hard constraints to satisfy, so exact evidence
+# is weighted up and loose category/BM25 signal down; browsing is open-ended, so
+# category fit and the broad lexical routes carry more. Multipliers are applied
+# to the shared scoring terms, blended by `scale` -- at scale 0 every track
+# reduces to the single-track weighting, which is the pre-routing behaviour.
+# Dual-track routing. Buying commits to hard constraints, so exact and
+# intersection evidence is weighted up and loose category/BM25 signal down.
+# Browsing carries a softer version of the same shape: by the turn the agent
+# first emits, a browsing session has disclosed the same kind of catalog
+# constraints a buying session has, so the two tracks differ in degree rather
+# than in kind -- an inverted browsing profile was measured four ways and every
+# one scored below this.
+#
+# A third track handles overrides. Those sessions relax to neutral because their
+# requirements were just rewritten, so the evidence is fresher and thinner than
+# the constraint count suggests; without that guard the stronger emphasis costs
+# intent_override 0.024 MRR.
+INTENT_EMPHASIS: dict[str, tuple[float, float, float, float, float]] = {
+    # exact, exact_coverage, intersection, route_bonus, category_coverage
+    "buying":    (1.50, 1.50, 1.50, 0.70, 0.60),
+    "browsing":  (1.30, 1.30, 1.30, 0.80, 0.75),
+    "uncertain": (1.00, 1.00, 1.00, 1.00, 1.00),
+}
+INTENT_ROUTE_EMPHASIS: dict[str, dict[str, float]] = {
+    "buying": {"exact": 1.5, "intersection": 1.5, "strict_bm25": 1.3, "broad_bm25": 0.6},
+    "browsing": {"exact": 1.3, "intersection": 1.3, "broad_bm25": 0.75},
+    "uncertain": {},
+}
+
+
+def blend(multiplier: float, scale: float) -> float:
+    """Interpolate a multiplier towards 1.0; scale 0 disables routing entirely."""
+    return 1.0 + scale * (multiplier - 1.0)
+
+
 MATERIAL_RE = re.compile(r"\b(" + "|".join(MATERIALS) + r")\b", re.IGNORECASE)
 COLOR_RE = re.compile(r"\b(" + "|".join(COLORS) + r")\b", re.IGNORECASE)
 
@@ -41,8 +76,15 @@ class Product:
 class CatalogIndex:
     """In-memory structured index plus SQLite FTS5 candidate retrieval."""
 
-    def __init__(self, catalog_path: str | Path) -> None:
+    def __init__(
+        self,
+        catalog_path: str | Path,
+        slot_decay: float = 1.0,
+        intent_routing_scale: float = 0.0,
+    ) -> None:
         self.catalog_path = Path(catalog_path)
+        self.slot_decay = slot_decay
+        self.intent_routing_scale = intent_routing_scale
         self.products: dict[str, Product] = {}
         self.constraint_index: dict[str, set[str]] = defaultdict(set)
         self.connection = sqlite3.connect(":memory:")
@@ -172,12 +214,25 @@ class CatalogIndex:
         state: SessionState,
         limit: int = 10,
     ) -> tuple[list[str], dict]:
-        active_values = [normalize(item.value) for item in state.active_constraints]
-        indexed_sets = [self.constraint_index[value] for value in active_values if value in self.constraint_index]
+        active = state.active_constraints
+        active_values = [normalize(item.value) for item in active]
+        indexed = [
+            (item, self.constraint_index[value])
+            for item, value in zip(active, active_values)
+            if value in self.constraint_index
+        ]
+        indexed_sets = [identifiers for _, identifiers in indexed]
 
+        # Slot decay: a constraint stated later is worth more than an earlier
+        # one, so a customer who changes direction is followed rather than
+        # averaged against their opening statement. decay == 1.0 weights every
+        # slot equally, which is the pre-decay behaviour.
+        latest_turn = max((item.turn for item, _ in indexed), default=0)
         exact_counts: Counter[str] = Counter()
-        for identifiers in indexed_sets:
-            exact_counts.update(identifiers)
+        for item, identifiers in indexed:
+            weight = self.slot_decay ** max(0, latest_turn - item.turn)
+            for parent_asin in identifiers:
+                exact_counts[parent_asin] += weight
 
         intersection: set[str] = set()
         if indexed_sets:
@@ -260,6 +315,18 @@ class CatalogIndex:
             route_bonus[parent_asin] += 60.0 / (60.0 + rank)
         profile_terms = set(terms(" ".join(state.profile_preferences), limit=12))
         avoidance_terms = set(terms(" ".join(state.profile_avoidances), limit=12))
+        scale = self.intent_routing_scale
+        # An override rewrites the requirements mid-session, so the evidence is
+        # fresher and thinner than the intent label suggests. Those sessions fall
+        # back to the neutral track rather than inheriting buying's aggressive
+        # hard-constraint emphasis.
+        track = state.intent_mode if state.intent_mode in INTENT_EMPHASIS else "uncertain"
+        if state.override_seen:
+            track = "uncertain"
+        w_exact, w_cover, w_inter, w_route, w_category = (
+            blend(m, scale) for m in INTENT_EMPHASIS[track]
+        )
+
         def legacy_score(parent_asin: str) -> tuple[float, str]:
             product = self.products[parent_asin]
             exact = exact_counts[parent_asin]
@@ -274,11 +341,11 @@ class CatalogIndex:
             )
             quality_prior = 0.20 * math.log1p(product.rating_number) + 0.03 * product.average_rating
             value = (
-                8.0 * exact
-                + 5.0 * exact_coverage
-                + (4.0 if parent_asin in intersection else 0.0)
-                + 2.0 * route_bonus[parent_asin]
-                + 1.5 * category_coverage(parent_asin)
+                8.0 * w_exact * exact
+                + 5.0 * w_cover * exact_coverage
+                + (4.0 * w_inter if parent_asin in intersection else 0.0)
+                + 2.0 * w_route * route_bonus[parent_asin]
+                + 1.5 * w_category * category_coverage(parent_asin)
                 + 0.15 * profile_coverage
                 - 0.25 * avoidance_coverage
                 + quality_prior
@@ -287,6 +354,11 @@ class CatalogIndex:
 
         legacy_ranked = sorted(candidates, key=legacy_score, reverse=True)
         routes.insert(0, ("legacy", 100.0, legacy_ranked))
+        route_emphasis = INTENT_ROUTE_EMPHASIS[track]
+        routes = [
+            (name, weight * blend(route_emphasis.get(name, 1.0), scale), ranking)
+            for name, weight, ranking in routes
+        ]
 
         rrf_scores: Counter[str] = Counter()
         for _, weight, ranking in routes:

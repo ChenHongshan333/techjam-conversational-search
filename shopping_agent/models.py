@@ -36,7 +36,6 @@ class SessionState:
     previous_recommendations: list[str] = field(default_factory=list)
     seen_recommendations: set[str] = field(default_factory=set)
     last_query_signature: tuple[str, ...] | None = None
-    initial_preference: str | None = None
     override_seen: bool = False
     intent_mode: str = "uncertain"
     intent_confidence: float = 0.0
