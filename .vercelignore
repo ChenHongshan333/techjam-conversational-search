@@ -1,0 +1,8 @@
+.env
+.venv/
+artifacts/
+submission-assets.zip
+docs/screenshots/
+tests/
+**/__pycache__/
+*.log

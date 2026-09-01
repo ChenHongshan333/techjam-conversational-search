@@ -1,0 +1,39 @@
+{
+  "sample_count": 200,
+  "hit_rate_at_10": 1.0,
+  "mrr": 0.965853,
+  "mttc": 2.305,
+  "efficiency": 0.8695,
+  "recommended_technical_score": 0.963656,
+  "reported_token_usage": {
+    "prompt_tokens": 0,
+    "completion_tokens": 0,
+    "total_tokens": 0
+  },
+  "scenario_metrics": {
+    "boundary": {
+      "sample_count": 10,
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.95,
+      "mttc": 2.6
+    },
+    "browsing": {
+      "sample_count": 80,
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.975,
+      "mttc": 2.2125
+    },
+    "buying": {
+      "sample_count": 80,
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.972619,
+      "mttc": 1.875
+    },
+    "intent_override": {
+      "sample_count": 30,
+      "hit_rate_at_10": 1.0,
+      "mrr": 0.928704,
+      "mttc": 3.6
+    }
+  }
+}

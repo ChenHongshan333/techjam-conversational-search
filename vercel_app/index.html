@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Seekly conversational shopping agent and evaluation studio.">
+  <title>Seekly · Conversational Shopping</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Seekly home">
+      <span class="brand-crop"><img src="/seekly-logo.png" alt="Seekly"></span>
+      <span class="brand-divider" aria-hidden="true"></span>
+      <span class="brand-copy">Shopping, made clear.</span>
+    </a>
+    <div class="header-actions">
+      <div class="system-status"><span class="status-dot" aria-hidden="true"></span>Agent online</div>
+      <button id="run-evaluation" class="button button-quiet" disabled title="The published score was validated with the official local evaluator.">Validated offline</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero" aria-labelledby="hero-title">
+      <div>
+        <p class="eyebrow">Customer distillation · adaptive retrieval</p>
+        <h1 id="hero-title">Customer signals,<br><span>distilled into search that adapts.</span></h1>
+      </div>
+      <p class="hero-copy">Seekly converts anonymous shopping history, rating behaviour, live preferences, and intent changes into safe retrieval signals—then ranks and explains every result in real time.</p>
+    </section>
+
+    <section class="performance-strip" aria-label="Current evaluation performance">
+      <article class="score-lead">
+        <span class="metric-label">Technical score</span>
+        <strong id="metric-score">—</strong>
+        <small id="metric-score-delta">Run evaluation to calculate</small>
+      </article>
+      <article>
+        <span class="metric-label">Hit Rate @ 10</span>
+        <strong id="metric-hit">—</strong>
+        <small id="metric-hit-baseline">Baseline —</small>
+      </article>
+      <article>
+        <span class="metric-label">Mean reciprocal rank</span>
+        <strong id="metric-mrr">—</strong>
+        <small id="metric-mrr-baseline">Baseline —</small>
+      </article>
+      <article>
+        <span class="metric-label">Turns to convert</span>
+        <strong id="metric-mttc">—</strong>
+        <small id="metric-mttc-baseline">Baseline —</small>
+      </article>
+    </section>
+
+    <section class="demo-section" aria-labelledby="demo-title">
+      <div class="section-heading">
+        <div>
+          <p class="eyebrow">Live customer journey</p>
+          <h2 id="demo-title">Shopping conversation</h2>
+        </div>
+        <div class="test-controls">
+          <label>
+            <span>Scenario</span>
+            <select id="scenario-filter">
+              <option value="">All scenarios</option>
+              <option value="buying">Buying</option>
+              <option value="browsing">Browsing</option>
+              <option value="intent_override">Intent override</option>
+              <option value="boundary">Boundary</option>
+            </select>
+          </label>
+          <label class="case-field">
+            <span>Public test case</span>
+            <select id="case-select"></select>
+          </label>
+          <button id="start-case" class="button button-primary">Start conversation</button>
+        </div>
+      </div>
+
+      <div id="case-meta" class="case-meta hidden"></div>
+
+      <div class="shopping-workspace">
+        <aside class="profile-rail surface" aria-labelledby="profile-title">
+          <div class="rail-heading">
+            <span class="rail-label">Customer profile</span>
+            <span class="privacy-badge">Anonymous</span>
+          </div>
+          <div class="customer-identity">
+            <div id="customer-avatar" class="customer-avatar">G</div>
+            <div>
+              <h3 id="profile-title">Guest shopper</h3>
+              <p id="customer-id">No active session</p>
+            </div>
+          </div>
+          <p id="profile-summary" class="profile-summary">Start a test case to load the shopper's anonymous aggregate profile.</p>
+
+          <div class="profile-block">
+            <span class="rail-label">Shopping priorities</span>
+            <div id="profile-tags" class="pill-list"><span class="empty-copy">Not loaded</span></div>
+          </div>
+
+          <dl class="profile-stats">
+            <div><dt>Purchase history</dt><dd id="profile-frequency">—</dd></div>
+            <div><dt>Average rating</dt><dd id="profile-rating">—</dd></div>
+            <div><dt>Rating behaviour</dt><dd id="profile-style">—</dd></div>
+          </dl>
+
+        </aside>
+
+        <section class="chat-panel surface" aria-label="Conversation between customer and Seekly">
+          <div class="chat-header">
+            <div class="agent-identity">
+              <div class="agent-mark"><span></span><span></span><span></span></div>
+              <div>
+                <strong>Seekly shopping agent</strong>
+                <span>Online · responds with ranked products</span>
+              </div>
+            </div>
+            <strong id="turn-counter" class="turn-counter">Select a case</strong>
+          </div>
+
+          <div id="conversation" class="conversation empty-state">
+            <div class="welcome-state">
+              <div class="welcome-mark"><span></span><span></span><span></span></div>
+              <h3>Ready when you are.</h3>
+              <p>Choose a public test case to watch Seekly clarify needs, rank products, and explain each result.</p>
+            </div>
+          </div>
+
+          <div class="chat-composer">
+            <div class="composer-copy">
+              <span class="composer-lock" aria-hidden="true">◇</span>
+              <span>Evaluator controls the customer's next reply</span>
+            </div>
+            <div class="action-row">
+              <button id="next-turn" class="button" disabled>Next reply</button>
+              <button id="auto-run" class="button button-primary" disabled>Play conversation</button>
+            </div>
+          </div>
+        </section>
+
+        <aside class="insight-rail surface" aria-labelledby="insight-title">
+          <div class="rail-heading">
+            <span id="insight-title" class="rail-label">Agent insight</span>
+            <label class="target-toggle">
+              <input type="checkbox" id="show-target">
+              <span>Reveal target</span>
+            </label>
+          </div>
+
+          <section class="insight-card intent-card">
+            <div class="insight-title-row">
+              <span class="insight-icon" aria-hidden="true">↗</span>
+              <span class="rail-label">Intent classification</span>
+            </div>
+            <strong id="intent-label">Waiting for a conversation</strong>
+            <p id="intent-detail">Seekly will adapt its retrieval strategy to buying, browsing, changed, or open-ended intent.</p>
+            <div class="confidence-row">
+              <span>Confidence</span>
+              <div class="confidence-track"><span id="intent-confidence-bar"></span></div>
+              <strong id="intent-confidence">—</strong>
+            </div>
+            <div id="intent-meta" class="intent-meta"></div>
+          </section>
+
+          <section class="insight-card">
+            <div class="insight-title-row">
+              <span class="insight-icon" aria-hidden="true">✓</span>
+              <span class="rail-label">Current needs</span>
+            </div>
+            <div id="active-constraints" class="pill-list"><span class="empty-copy">No requirements yet</span></div>
+          </section>
+
+          <section class="insight-card explanation-card">
+            <div class="insight-title-row">
+              <span class="insight-icon sparkle" aria-hidden="true">✦</span>
+              <span class="rail-label">Why these results</span>
+            </div>
+            <p id="why-summary">Ranking evidence will appear after the first response.</p>
+            <ul id="why-signals" class="signal-list"></ul>
+            <p id="profile-use" class="profile-use"></p>
+          </section>
+
+          <section id="session-result" class="insight-card session-result">
+            <span class="empty-copy">Session in progress</span>
+          </section>
+
+          <details class="retrieval-details">
+            <summary>Technical retrieval trace</summary>
+            <div class="details-content">
+              <dl id="candidate-flow" class="data-list">
+                <div><dt>Exact</dt><dd>—</dd></div>
+                <div><dt>Intersection</dt><dd>—</dd></div>
+                <div><dt>BM25 AND</dt><dd>—</dd></div>
+                <div><dt>BM25 OR</dt><dd>—</dd></div>
+                <div><dt>Dense identity</dt><dd>—</dd></div>
+                <div><dt>Dense attributes</dt><dd>—</dd></div>
+                <div><dt>Fused</dt><dd>—</dd></div>
+              </dl>
+              <span class="rail-label detail-label">Query terms</span>
+              <p id="query-terms" class="mono empty-copy">—</p>
+              <span class="rail-label detail-label">Semantic query</span>
+              <p id="semantic-query" class="mono empty-copy">—</p>
+              <div id="retrieval-status" class="pill-list"></div>
+            </div>
+          </details>
+
+          <div class="target-details hidden" id="target-details">
+            <span class="rail-label">Evaluator target</span>
+            <strong id="target-title"></strong>
+            <code id="target-asin"></code>
+          </div>
+        </aside>
+      </div>
+    </section>
+
+    <section class="evaluation-section" aria-labelledby="evaluation-title">
+      <div class="section-heading compact-heading">
+        <div>
+          <p class="eyebrow">Technical evidence</p>
+          <h2 id="evaluation-title">Performance by scenario</h2>
+        </div>
+        <span id="evaluation-status" class="evaluation-status">No evaluation running</span>
+      </div>
+      <div class="scenario-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Scenario</th>
+              <th>Cases</th>
+              <th>Hit @ 10</th>
+              <th>MRR</th>
+              <th>MTTC</th>
+              <th>Sector score</th>
+            </tr>
+          </thead>
+          <tbody id="scenario-table">
+            <tr><td colspan="6" class="empty-cell">Run an evaluation to see scenario metrics.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="score-formula">Technical score = 50% Hit Rate@10 + 30% MRR + 20% conversational efficiency.</p>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-brand"><strong>Seekly</strong><span>Conversational search with visible reasoning.</span></div>
+    <div class="footer-meta"><span>TechJam Track 04</span><span id="footer-status">Ready</span></div>
+  </footer>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

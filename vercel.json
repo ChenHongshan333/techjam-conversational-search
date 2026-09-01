@@ -1,0 +1,19 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "buildCommand": "python3 vercel_app/prepare.py",
+  "functions": {
+    "api/index.py": {
+      "maxDuration": 60,
+      "includeFiles": "{data/catalog.jsonl,data/public_set.jsonl,docs/baseline_results.json,vercel_app/validated_results.json}",
+      "excludeFiles": "{submission-assets.zip,catalog.jsonl.gz,artifacts/**,tests/**,docs/screenshots/**,.venv/**,**/__pycache__/**}"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/:path*", "destination": "/api?route=:path*" },
+    { "source": "/", "destination": "/vercel_app/index.html" },
+    { "source": "/app.js", "destination": "/vercel_app/app.js" },
+    { "source": "/styles.css", "destination": "/dashboard/static/styles.css" },
+    { "source": "/seekly-logo.png", "destination": "/dashboard/static/seekly-logo.png" }
+  ]
+}
