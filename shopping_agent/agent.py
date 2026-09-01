@@ -12,6 +12,7 @@ from .models import SessionState
 from .providers.openrouter import OpenRouterClient
 from .retrieval.catalog import CatalogIndex
 from .retrieval.exploration import select_diverse_candidates
+from .retrieval.override import rerank_override_candidates
 from .retrieval.query import QueryBuilder
 from .retrieval.semantic import DenseProductRetriever, ProductReranker, weighted_rrf
 
@@ -31,6 +32,8 @@ class ShoppingAgent:
             self.settings.dynamic_truncation,
             self.settings.truncation_strong_evidence,
             self.settings.truncation_floor,
+            self.settings.retracted_context_weight,
+            self.settings.exact_category_suffix_bonus,
         )
         client = (
             OpenRouterClient(self.settings.api_key, self.settings.request_timeout_seconds)
@@ -124,16 +127,43 @@ class ShoppingAgent:
             "llm_rewrite_used": search_query.rewrite_used,
             "llm_rewrite_error": search_query.error,
             "dense_retrieval_enabled": self.dense_retriever is not None,
+            "dense_retrieval_applied": False,
+            "dense_filtered": self.settings.dense_filtered,
+            "dense_min_turn": self.settings.dense_min_turn,
+            "dense_tracks": list(self.settings.dense_tracks),
+            "dense_candidate_pool_count": 0,
             "dense_retrieval_error": None,
             "dense_identity_candidate_count": 0,
             "dense_attribute_candidate_count": 0,
             "rerank_enabled": self.reranker is not None,
             "rerank_error": None,
         }
-        if self.dense_retriever is not None:
-            dense = self.dense_retriever.search(search_query.semantic_query, limit=600)
+        dense_track = "override" if state.override_seen else state.intent_mode
+        dense_track_allowed = (
+            "all" in self.settings.dense_tracks
+            or dense_track in self.settings.dense_tracks
+        )
+        semantic_diagnostics["dense_active_track"] = dense_track
+        semantic_diagnostics["dense_track_allowed"] = dense_track_allowed
+        if (
+            self.dense_retriever is not None
+            and turn >= self.settings.dense_min_turn
+            and dense_track_allowed
+        ):
+            dense_candidates = (
+                ranked_pool[:self.settings.dense_candidate_pool_size]
+                if self.settings.dense_filtered
+                else None
+            )
+            dense = self.dense_retriever.search(
+                search_query.semantic_query,
+                limit=min(600, len(dense_candidates)) if dense_candidates is not None else 600,
+                candidate_ids=dense_candidates,
+            )
             prompt_tokens += dense.prompt_tokens
             semantic_diagnostics.update({
+                "dense_retrieval_applied": True,
+                "dense_candidate_pool_count": dense.candidate_count,
                 "dense_retrieval_error": dense.error,
                 "dense_identity_candidate_count": len(dense.identity_ranking),
                 "dense_attribute_candidate_count": len(dense.attribute_ranking),
@@ -170,6 +200,24 @@ class ShoppingAgent:
                 (self.settings.rerank_model_fusion_weight, reranked.ranking),
             ])
             ranked_pool = reranked_head + ranked_pool[depth:]
+
+        override_likelihood = rerank_override_candidates(
+            ranked_pool,
+            self.catalog.products,
+            state,
+            enabled=self.settings.override_likelihood_enabled,
+        )
+        ranked_pool = override_likelihood.ranking
+        semantic_diagnostics.update({
+            "override_likelihood_enabled": self.settings.override_likelihood_enabled,
+            "override_likelihood_applied": override_likelihood.applied,
+            "override_likelihood_exact_hard_candidates": (
+                override_likelihood.exact_hard_candidates
+            ),
+            "override_likelihood_exact_context_candidates": (
+                override_likelihood.exact_context_candidates
+            ),
+        })
         query_signature = (
             state.category or "",
             *(f"{item.attribute}:{item.value.casefold()}" for item in state.active_constraints),
@@ -216,12 +264,26 @@ class ShoppingAgent:
         )
         if suppressed and turn > self.settings.suppression_turns:
             state.overload_cutoffs += 1
-        if suppressed:
-            # Withhold this turn's list so the session spends the turn gathering
-            # a constraint instead of converting at a rank the evidence does not
-            # yet support. The clarifying question still goes out.
+
+        early_limit: int | None = None
+        if (
+            self.settings.suppression_enabled
+            and turn <= self.settings.suppression_turns
+            and (self.settings.early_recommendation_limit > 0 or suppressed)
+        ):
+            # Keep one best-effort result visible while the opening turns gather
+            # evidence. A zero limit reproduces the previous fully silent policy.
+            early_limit = min(top_k, self.settings.early_recommendation_limit)
+            recommendations = ranked_pool[:early_limit]
+        elif suppressed:
             recommendations = []
+
+        if suppressed:
             state.suppressed_turns += 1
+        recommendations_suppressed = suppressed and not recommendations
+        recommendations_narrowed = (
+            early_limit is not None and len(ranked_pool) > early_limit
+        )
         state.previous_recommendations = recommendations
         state.seen_recommendations.update(recommendations)
         state.last_query_signature = query_signature
@@ -274,7 +336,10 @@ class ShoppingAgent:
             "profile_avoidances": list(state.profile_avoidances),
             "seen_recommendation_count": len(state.seen_recommendations),
             "fused_pool_size": len(ranked_pool),
-            "recommendations_suppressed": suppressed,
+            "gathering_turn": suppressed,
+            "recommendations_suppressed": recommendations_suppressed,
+            "recommendations_narrowed": recommendations_narrowed,
+            "recommendation_limit": early_limit if early_limit is not None else top_k,
             "overload_cutoffs": state.overload_cutoffs,
             "suppressed_turns": state.suppressed_turns,
             "gained_information": state.gained_information,

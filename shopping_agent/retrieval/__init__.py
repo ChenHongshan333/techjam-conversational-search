@@ -2,6 +2,7 @@
 
 from .catalog import CatalogIndex, Product
 from .exploration import DiverseSelection, select_diverse_candidates
+from .override import OverrideLikelihoodResult, rerank_override_candidates
 from .query import QueryBuilder, SearchQuery
 from .semantic import DenseProductRetriever, ProductReranker, weighted_rrf
 
@@ -11,8 +12,10 @@ __all__ = [
     "DiverseSelection",
     "Product",
     "ProductReranker",
+    "OverrideLikelihoodResult",
     "QueryBuilder",
     "SearchQuery",
     "select_diverse_candidates",
+    "rerank_override_candidates",
     "weighted_rrf",
 ]

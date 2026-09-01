@@ -35,10 +35,17 @@ class RetrievalSettings:
     intent_enabled: bool
     rewrite_enabled: bool
     dense_enabled: bool
+    dense_filtered: bool
+    dense_min_turn: int
+    dense_candidate_pool_size: int
+    dense_tracks: tuple[str, ...]
     rerank_enabled: bool
     slot_decay: float
     intent_routing_scale: float
     retracted_weight: float
+    retracted_context_weight: float
+    exact_category_suffix_bonus: float
+    override_likelihood_enabled: bool
     constraint_lock: bool
     lock_tracks: tuple[str, ...]
     dynamic_truncation: bool
@@ -49,6 +56,7 @@ class RetrievalSettings:
     suppression_max_turns: int
     suppression_turns: int
     suppression_reserve_turns: int
+    early_recommendation_limit: int
     rewrite_model: str
     embedding_model: str
     rerank_model: str
@@ -76,17 +84,34 @@ class RetrievalSettings:
         load_env_file(env_path)
         semantic_index_value = os.environ.get("TECHJAM_SEMANTIC_INDEX_PATH", "").strip()
         return cls(
-            api_key=os.environ.get("CLAUDE_API_KEY", "").strip(),
+            api_key=os.environ.get("OPENROUTER_API_KEY", "").strip(),
             answer_enabled=_enabled("TECHJAM_LLM_ANSWER"),
             intent_enabled=_enabled("TECHJAM_LLM_INTENT"),
             rewrite_enabled=_enabled("TECHJAM_LLM_REWRITE"),
             dense_enabled=_enabled("TECHJAM_DENSE_RETRIEVAL"),
+            dense_filtered=_enabled("TECHJAM_DENSE_FILTERED", True),
+            dense_min_turn=max(1, int(os.environ.get("TECHJAM_DENSE_MIN_TURN", "3"))),
+            dense_candidate_pool_size=max(
+                1, int(os.environ.get("TECHJAM_DENSE_CANDIDATE_POOL_SIZE", "1000"))
+            ),
+            dense_tracks=tuple(
+                value.strip().casefold()
+                for value in os.environ.get("TECHJAM_DENSE_TRACKS", "override").split(",")
+                if value.strip()
+            ),
             rerank_enabled=_enabled("TECHJAM_RERANK"),
             slot_decay=float(os.environ.get("TECHJAM_SLOT_DECAY", "0.9")),
             intent_routing_scale=float(
                 os.environ.get("TECHJAM_INTENT_ROUTING_SCALE", "1.0")
             ),
-            retracted_weight=float(os.environ.get("TECHJAM_RETRACTED_WEIGHT", "0")),
+            retracted_weight=float(os.environ.get("TECHJAM_RETRACTED_WEIGHT", "0.25")),
+            retracted_context_weight=float(
+                os.environ.get("TECHJAM_RETRACTED_CONTEXT_WEIGHT", "1.0")
+            ),
+            exact_category_suffix_bonus=float(
+                os.environ.get("TECHJAM_EXACT_CATEGORY_SUFFIX_BONUS", "0.5")
+            ),
+            override_likelihood_enabled=_enabled("TECHJAM_OVERRIDE_LIKELIHOOD"),
             constraint_lock=_enabled("TECHJAM_CONSTRAINT_LOCK", True),
             lock_tracks=tuple(
                 value.strip()
@@ -104,6 +129,9 @@ class RetrievalSettings:
             suppression_turns=int(os.environ.get("TECHJAM_SUPPRESSION_TURNS", "2")),
             suppression_reserve_turns=int(
                 os.environ.get("TECHJAM_SUPPRESSION_RESERVE_TURNS", "3")
+            ),
+            early_recommendation_limit=max(
+                0, int(os.environ.get("TECHJAM_EARLY_RECOMMENDATION_LIMIT", "1"))
             ),
             rewrite_model=os.environ.get("TECHJAM_REWRITE_MODEL", "openai/gpt-5.6-luna"),
             embedding_model=os.environ.get("TECHJAM_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),

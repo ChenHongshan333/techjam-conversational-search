@@ -60,6 +60,7 @@ def rerank_query_document(model: str, query: str) -> str:
 class DenseSearchResult:
     identity_ranking: list[str]
     attribute_ranking: list[str]
+    candidate_count: int = 0
     prompt_tokens: int = 0
     error: str | None = None
 
@@ -86,9 +87,14 @@ class DenseProductRetriever:
         self.client = client
         self.settings = settings
         self.identifiers = list(catalog.products)
+        self.identifier_indexes = {
+            parent_asin: index for index, parent_asin in enumerate(self.identifiers)
+        }
         self.identity_matrix = None
         self.attribute_matrix = None
-        self.search_cache: dict[tuple[str, int], DenseSearchResult] = {}
+        self.search_cache: dict[
+            tuple[str, int, tuple[str, ...] | None], DenseSearchResult
+        ] = {}
 
         self.catalog_fingerprint = self._catalog_fingerprint()
         model_name = settings.embedding_model.rsplit("/", 1)[-1].casefold()
@@ -396,16 +402,35 @@ class DenseProductRetriever:
         prompt_tokens = self._build()
         return self.cache_path, prompt_tokens
 
-    def _top(self, matrix, query_vector, limit: int) -> list[str]:
+    def _top(
+        self,
+        matrix,
+        query_vector,
+        limit: int,
+        candidate_ids: tuple[str, ...] | None = None,
+    ) -> list[str]:
         np = self._numpy()
-        scores = matrix @ query_vector
+        if candidate_ids is None:
+            matrix_indexes = np.arange(len(self.identifiers), dtype=np.int64)
+        else:
+            matrix_indexes = np.asarray(
+                [
+                    self.identifier_indexes[parent_asin]
+                    for parent_asin in candidate_ids
+                    if parent_asin in self.identifier_indexes
+                ],
+                dtype=np.int64,
+            )
+        if len(matrix_indexes) == 0:
+            return []
+        scores = matrix[matrix_indexes] @ query_vector
         count = min(max(1, limit), len(scores))
         if count == len(scores):
             indexes = np.argsort(scores)[::-1]
         else:
             indexes = np.argpartition(scores, -count)[-count:]
             indexes = indexes[np.argsort(scores[indexes])[::-1]]
-        return [self.identifiers[int(index)] for index in indexes]
+        return [self.identifiers[int(matrix_indexes[index])] for index in indexes]
 
     def _query_vector(self, query: str):
         np = self._numpy()
@@ -446,8 +471,16 @@ class DenseProductRetriever:
         self._atomic_save_array(np, query_path, vector)
         return vector, response.prompt_tokens
 
-    def search(self, query: str, limit: int = 500) -> DenseSearchResult:
-        cache_key = (query, limit)
+    def search(
+        self,
+        query: str,
+        limit: int = 500,
+        candidate_ids: list[str] | tuple[str, ...] | None = None,
+    ) -> DenseSearchResult:
+        filtered_ids = (
+            tuple(dict.fromkeys(candidate_ids)) if candidate_ids is not None else None
+        )
+        cache_key = (query, limit, filtered_ids)
         cached = self.search_cache.get(cache_key)
         if cached is not None:
             return replace(cached, prompt_tokens=0)
@@ -463,8 +496,15 @@ class DenseProductRetriever:
                 )
             query_vector, prompt_tokens = self._query_vector(query)
             result = DenseSearchResult(
-                identity_ranking=self._top(self.identity_matrix, query_vector, limit),
-                attribute_ranking=self._top(self.attribute_matrix, query_vector, limit),
+                identity_ranking=self._top(
+                    self.identity_matrix, query_vector, limit, filtered_ids
+                ),
+                attribute_ranking=self._top(
+                    self.attribute_matrix, query_vector, limit, filtered_ids
+                ),
+                candidate_count=(
+                    len(self.identifiers) if filtered_ids is None else len(filtered_ids)
+                ),
                 prompt_tokens=prompt_tokens,
             )
             self.search_cache[cache_key] = result

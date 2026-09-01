@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import itertools
 import json
+import os
 import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from unittest.mock import patch
 
 from shopping_agent import ShoppingAgent
 from shopping_agent.config import RetrievalSettings
@@ -18,8 +20,9 @@ from shopping_agent.conversation.state import ingest_message
 from shopping_agent.models import Constraint, SessionState
 from shopping_agent.providers.openrouter import OpenRouterError, OpenRouterResponse
 import shopping_agent.retrieval.catalog as catalog_module
-from shopping_agent.retrieval.catalog import CatalogIndex
+from shopping_agent.retrieval.catalog import CatalogIndex, Product
 from shopping_agent.retrieval.exploration import select_diverse_candidates
+from shopping_agent.retrieval.override import rerank_override_candidates
 from shopping_agent.retrieval.query import QueryBuilder
 from shopping_agent.retrieval.semantic import (
     DenseSearchResult,
@@ -27,6 +30,7 @@ from shopping_agent.retrieval.semantic import (
     embedding_query_document,
     weighted_rrf,
 )
+from shopping_agent.text import normalize
 
 
 def without_suppression(agent: "ShoppingAgent") -> "ShoppingAgent":
@@ -276,6 +280,31 @@ class QueryTest(unittest.TestCase):
         self.assertTrue(value.endswith("Query: red cotton hoodie"))
 
 
+class ConfigTest(unittest.TestCase):
+    def test_openrouter_key_enables_remote_dense_retrieval(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            env_path = Path(directory) / ".env"
+            env_path.write_text(
+                "OPENROUTER_API_KEY=test-openrouter-key\n"
+                "TECHJAM_DENSE_RETRIEVAL=1\n",
+                encoding="utf-8",
+            )
+            with patch.dict(os.environ, {}, clear=True):
+                settings = RetrievalSettings.from_environment(env_path)
+        self.assertEqual(settings.api_key, "test-openrouter-key")
+        self.assertTrue(settings.dense_enabled)
+        self.assertTrue(settings.dense_filtered)
+        self.assertEqual(settings.dense_min_turn, 3)
+        self.assertEqual(settings.dense_candidate_pool_size, 1000)
+        self.assertEqual(settings.dense_tracks, ("override",))
+        self.assertTrue(settings.remote_enabled)
+        self.assertEqual(settings.retracted_weight, 0.25)
+        self.assertEqual(settings.retracted_context_weight, 1.0)
+        self.assertEqual(settings.exact_category_suffix_bonus, 0.5)
+        self.assertFalse(settings.override_likelihood_enabled)
+        self.assertEqual(settings.early_recommendation_limit, 1)
+
+
 class ExplorationTest(unittest.TestCase):
     def test_facet_exploration_promotes_a_deep_distinct_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -329,10 +358,20 @@ class FakeEmbeddingClient:
 
 
 class FakeDenseRetriever:
-    def search(self, query: str, limit: int = 500) -> DenseSearchResult:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, int, list[str] | None]] = []
+
+    def search(
+        self,
+        query: str,
+        limit: int = 500,
+        candidate_ids: list[str] | None = None,
+    ) -> DenseSearchResult:
+        self.calls.append((query, limit, candidate_ids))
         return DenseSearchResult(
             identity_ranking=["TARGET", "OTHER"],
             attribute_ranking=["OTHER", "TARGET"],
+            candidate_count=len(candidate_ids or []),
         )
 
 
@@ -439,6 +478,30 @@ class SemanticIndexTest(unittest.TestCase):
             self.assertEqual(cache_path, explicit_path)
             self.assertTrue(explicit_path.exists())
 
+    def test_dense_top_scores_only_requested_candidates(self) -> None:
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("NumPy is optional")
+        with tempfile.TemporaryDirectory() as directory:
+            catalog_path = write_catalog(directory)
+            retriever = DenseProductRetriever(
+                CatalogIndex(catalog_path),
+                catalog_path,
+                FakeEmbeddingClient(),
+                self.settings(directory),
+            )
+            matrix = np.zeros((2, 32), dtype=np.float32)
+            matrix[retriever.identifier_indexes["TARGET"], 0] = 1.0
+            matrix[retriever.identifier_indexes["OTHER"], 1] = 1.0
+            query = np.zeros(32, dtype=np.float32)
+            query[0] = 1.0
+
+            self.assertEqual(
+                retriever._top(matrix, query, 10, ("OTHER",)),
+                ["OTHER"],
+            )
+
 
 class AgentTest(unittest.TestCase):
     def test_accumulates_constraints_and_retrieves_target(self) -> None:
@@ -499,6 +562,11 @@ class AgentTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             agent = ShoppingAgent(write_catalog(directory))
             agent.dense_retriever = FakeDenseRetriever()
+            agent.settings = replace(
+                agent.settings,
+                dense_min_turn=1,
+                dense_tracks=("buying", "browsing"),
+            )
 
             agent.reset("browse", {})
             agent.respond(
@@ -527,6 +595,33 @@ class AgentTest(unittest.TestCase):
                 "dense_identity": 1.0,
                 "dense_attribute": 1.0,
             })
+
+    def test_dense_retrieval_is_gated_and_uses_lexical_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = without_suppression(ShoppingAgent(write_catalog(directory)))
+            dense = FakeDenseRetriever()
+            agent.dense_retriever = dense
+            agent.settings = replace(agent.settings, dense_tracks=("browsing",))
+
+            agent.reset("filtered", {})
+            agent.respond(
+                "filtered",
+                "I'm looking for Shoes, but I'm still exploring.",
+                turn=1,
+                top_k=10,
+            )
+            self.assertEqual(dense.calls, [])
+            self.assertFalse(agent.get_diagnostics("filtered")["dense_retrieval_applied"])
+
+            agent.respond(
+                "filtered",
+                "For that, what matters is: leather; color: black.",
+                turn=3,
+                top_k=10,
+            )
+            self.assertEqual(len(dense.calls), 1)
+            self.assertEqual(set(dense.calls[0][2] or []), {"TARGET", "OTHER"})
+            self.assertTrue(agent.get_diagnostics("filtered")["dense_retrieval_applied"])
 
     def test_catalog_resolves_semicolons_inside_a_single_feature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -598,7 +693,7 @@ if __name__ == "__main__":
 
 
 class SuppressionRuleTest(unittest.TestCase):
-    """The rules that bound how long a session may stay silent."""
+    """The rules that bound the opening evidence-gathering window."""
 
     def build(self, **overrides) -> ShoppingAgent:
         with tempfile.TemporaryDirectory() as directory:
@@ -612,11 +707,12 @@ class SuppressionRuleTest(unittest.TestCase):
         agent.settings = replace(agent.settings, **{**defaults, **overrides})
         return agent
 
-    def test_shipped_default_withholds_the_first_two_turns(self) -> None:
+    def test_shipped_default_narrows_the_first_two_turns(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             agent = ShoppingAgent(write_catalog(directory))
         self.assertTrue(agent.settings.suppression_enabled)
         self.assertEqual(agent.settings.suppression_turns, 2)
+        self.assertEqual(agent.settings.early_recommendation_limit, 1)
         state = SessionState(user_profile={})
         self.assertTrue(agent._suppress(state, 1))
         self.assertTrue(agent._suppress(state, 2))
@@ -643,6 +739,72 @@ class SuppressionRuleTest(unittest.TestCase):
         self.assertFalse(
             agent._suppress(SessionState(user_profile={}, gained_information=False), 3)
         )
+
+
+class ProgressiveRecommendationTest(unittest.TestCase):
+    def write_wide_catalog(self, directory: str) -> Path:
+        path = Path(directory) / "catalog.jsonl"
+        products = [
+            {
+                "parent_asin": f"ITEM{i:02d}",
+                "title": f"Women's black leather winter boot {i}",
+                "features": ["Genuine leather", "Warm fleece lining"],
+                "details": {"Color": "Black", "Department": "Womens"},
+                "categories": ["Clothing", "Shoes", "Boots"],
+            }
+            for i in range(15)
+        ]
+        path.write_text(
+            "".join(json.dumps(product) + "\n" for product in products),
+            encoding="utf-8",
+        )
+        return path
+
+    def test_returns_one_result_then_widens_to_top_ten(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(self.write_wide_catalog(directory))
+            agent.reset("progressive", {})
+            first = agent.respond(
+                "progressive", "I'm looking for women's boots, but I'm still exploring.", 1, 10
+            )
+            first_diagnostics = agent.get_diagnostics("progressive")
+            first_ids = {item["parent_asin"] for item in first["recommendations"]}
+
+            self.assertEqual(len(first["recommendations"]), 1)
+            self.assertTrue(first_diagnostics["gathering_turn"])
+            self.assertFalse(first_diagnostics["recommendations_suppressed"])
+            self.assertTrue(first_diagnostics["recommendations_narrowed"])
+            self.assertEqual(first_diagnostics["recommendation_limit"], 1)
+            self.assertEqual(agent.sessions["progressive"].seen_recommendations, first_ids)
+
+            second = agent.respond(
+                "progressive", "For that, what matters is: genuine leather.", 2, 10
+            )
+            second_ids = {item["parent_asin"] for item in second["recommendations"]}
+            self.assertEqual(len(second["recommendations"]), 1)
+            self.assertEqual(
+                agent.sessions["progressive"].seen_recommendations,
+                first_ids | second_ids,
+            )
+
+            third = agent.respond(
+                "progressive", "For that, what matters is: warm fleece lining.", 3, 10
+            )
+            third_diagnostics = agent.get_diagnostics("progressive")
+            self.assertEqual(len(third["recommendations"]), 10)
+            self.assertFalse(third_diagnostics["recommendations_narrowed"])
+            self.assertEqual(third_diagnostics["recommendation_limit"], 10)
+
+    def test_zero_limit_reproduces_the_previous_silent_opening(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = ShoppingAgent(self.write_wide_catalog(directory))
+            agent.settings = replace(agent.settings, early_recommendation_limit=0)
+            agent.reset("silent", {})
+            first = agent.respond(
+                "silent", "I'm looking for women's boots, but I'm still exploring.", 1, 10
+            )
+        self.assertFalse(first["recommendations"])
+        self.assertTrue(agent.get_diagnostics("silent")["recommendations_suppressed"])
 
 
 class SuppressionExhaustionTest(unittest.TestCase):
@@ -682,6 +844,7 @@ class RotationPrecedenceTest(unittest.TestCase):
             agent.settings = replace(
                 agent.settings, suppression_enabled=True,
                 suppression_turns=3, suppression_max_turns=9,
+                early_recommendation_limit=0,
             )
             agent.reset("s", {})
             # Withheld while the customer still has information to give.
@@ -814,13 +977,13 @@ class IntentRoutingTest(unittest.TestCase):
 class RetractedSlotTest(unittest.TestCase):
     """A retracted preference is weak evidence, never a live requirement."""
 
-    def test_strict_erasure_is_the_default(self) -> None:
-        # The brief specifies slot erasure, so a retracted slot contributes
-        # nothing by default. Retention is available but opt-in.
+    def test_weak_retention_is_the_default(self) -> None:
+        # Retraction removes the live requirement while retaining the abandoned
+        # preference as a small exact-match tiebreaker.
         with tempfile.TemporaryDirectory() as directory:
             agent = ShoppingAgent(write_catalog(directory))
-        self.assertEqual(agent.settings.retracted_weight, 0.0)
-        self.assertEqual(agent.catalog.retracted_weight, 0.0)
+        self.assertEqual(agent.settings.retracted_weight, 0.25)
+        self.assertEqual(agent.catalog.retracted_weight, 0.25)
 
     def test_retracted_slot_never_counts_as_a_live_constraint(self) -> None:
         # It must not enter the intersection or the coverage denominator, or a
@@ -844,6 +1007,104 @@ class RetractedSlotTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             catalog = CatalogIndex(write_catalog(directory), retracted_weight=0.0)
         self.assertEqual(catalog.retracted_weight, 0.0)
+
+    def test_retracted_context_is_a_separate_optional_route(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = write_catalog(directory)
+            enabled = CatalogIndex(
+                path,
+                retracted_weight=0.0,
+                retracted_context_weight=1.0,
+            )
+            disabled = CatalogIndex(
+                path,
+                retracted_weight=0.0,
+                retracted_context_weight=0.0,
+            )
+        state = SessionState(user_profile={}, category="Shoes Boots")
+        live = Constraint("Genuine leather", "material", 2, "answer")
+        dropped = Constraint("Warm fleece lining", "feature", 1, "stated", active=False)
+        state.constraints.extend([live, dropped])
+        _, enabled_diagnostics = enabled.retrieve_with_diagnostics(state, limit=10)
+        _, disabled_diagnostics = disabled.retrieve_with_diagnostics(state, limit=10)
+        self.assertIn("retracted_context", enabled_diagnostics["retrieval_routes"])
+        self.assertNotIn("retracted_context", disabled_diagnostics["retrieval_routes"])
+        self.assertEqual(
+            enabled_diagnostics["intersection_candidate_count"],
+            disabled_diagnostics["intersection_candidate_count"],
+        )
+
+
+class CategoryHierarchyTest(unittest.TestCase):
+    def test_matches_the_last_two_taxonomy_nodes_exactly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            catalog = CatalogIndex(write_catalog(directory))
+        self.assertTrue(catalog.exact_category_suffix("TARGET", "Shoes Boots"))
+        self.assertFalse(catalog.exact_category_suffix("TARGET", "Shoes Athletic"))
+
+
+class OverrideLikelihoodTest(unittest.TestCase):
+    @staticmethod
+    def product(parent_asin: str, salient_values: tuple[str, ...]) -> Product:
+        return Product(
+            parent_asin=parent_asin,
+            title=parent_asin,
+            categories="Women Tops",
+            category_values=["Women", "Tops"],
+            identity_text=parent_asin,
+            attribute_text=" ".join(salient_values),
+            search_text=" ".join(salient_values).casefold(),
+            atomic_values={normalize(value) for value in salient_values},
+            salient_values=salient_values,
+            average_rating=4.0,
+            rating_number=1,
+        )
+
+    @staticmethod
+    def override_state() -> SessionState:
+        state = SessionState(user_profile={}, override_seen=True)
+        state.constraints.extend([
+            Constraint("polyester", "material", 2, "answer"),
+            Constraint("95% Polyester, 5% Spandex", "material", 2, "answer"),
+            Constraint("Pull On closure", "feature", 1, "stated", active=False),
+        ])
+        return state
+
+    def test_catalog_provenance_promotes_the_plausible_override_candidate(self) -> None:
+        products = {
+            "OTHER": self.product(
+                "OTHER",
+                ("polyester", "95% Polyester, 5% Spandex", "Imported", "Button closure"),
+            ),
+            "TARGET": self.product(
+                "TARGET",
+                ("polyester", "95% Polyester, 5% Spandex", "Imported", "Pull On closure"),
+            ),
+        }
+        result = rerank_override_candidates(
+            ["OTHER", "TARGET"],
+            products,
+            self.override_state(),
+            enabled=True,
+        )
+        self.assertTrue(result.applied)
+        self.assertEqual(result.ranking[0], "TARGET")
+        self.assertEqual(result.exact_hard_candidates, 2)
+        self.assertEqual(result.exact_context_candidates, 1)
+
+    def test_disabled_mode_preserves_the_base_ranking(self) -> None:
+        products = {
+            "OTHER": self.product("OTHER", ("polyester", "cotton")),
+            "TARGET": self.product("TARGET", ("polyester", "cotton")),
+        }
+        result = rerank_override_candidates(
+            ["OTHER", "TARGET"],
+            products,
+            self.override_state(),
+            enabled=False,
+        )
+        self.assertFalse(result.applied)
+        self.assertEqual(result.ranking, ["OTHER", "TARGET"])
 
 
 class DynamicTruncationTest(unittest.TestCase):

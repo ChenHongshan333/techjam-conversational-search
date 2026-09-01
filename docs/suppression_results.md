@@ -1,5 +1,25 @@
 # Early-conversion suppression: Phases A–C
 
+## Shipped follow-up: progressive widening (2026-09-01)
+
+The original implementation returned no products during its opening gathering
+window. The shipped policy now returns rank 1 on turns 1-2 and widens to Top 10
+from turn 3. Only displayed products enter `seen_recommendations`.
+
+| Opening policy | Hit Rate@10 | MRR | MTTC | Score |
+|---|---:|---:|---:|---:|
+| Silent turns 1-2 | 1.000 | 0.941556 | 3.105 | 0.940367 |
+| Rank 1 on turn 1 only | 1.000 | 0.941556 | 2.805 | 0.946367 |
+| Rank 2 on turns 1-2 | 1.000 | 0.881556 | 2.190 | 0.940667 |
+| **Rank 1 on turns 1-2 (shipped)** | **1.000** | **0.949056** | **2.345** | **0.957817** |
+| Rank 1 on turns 1-3 | 0.980 | 0.955833 | 2.595 | 0.944850 |
+| Rank 1 on turns 1-4 | 0.975 | 0.957500 | 2.675 | 0.941250 |
+
+The two-turn rank-1 policy is the best measured balance: it keeps all 200 hits,
+makes 124 sessions convert earlier, improves three targets to rank 1 with no
+rank regressions, and avoids the hit-rate cliff caused by narrowing later turns.
+Use `TECHJAM_EARLY_RECOMMENDATION_LIMIT=0` to reproduce the older silent policy.
+
 Baseline: Hit Rate@10 1.000, MRR 0.739940, MTTC 2.035, score 0.901282.
 
 ## The hypothesis

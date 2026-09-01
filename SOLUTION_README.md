@@ -16,19 +16,27 @@ Validated on all 200 public sessions:
 | Clarification + facet exploration (offline) | 1.000 | 0.739940 | 2.035 | 0.901282 |
 | Qwen8B dense hybrid | 0.995 | 0.744899 | 2.055 | 0.899870 |
 | + early-conversion suppression | 1.000 | 0.933034 | 3.120 | 0.937510 |
-| **+ dual-track intent routing (shipped)** | **1.000** | **0.937200** | **3.120** | **0.938760** |
+| + dual-track intent routing | 1.000 | 0.937200 | 3.120 | 0.938760 |
+| + weak retracted-preference evidence | 1.000 | 0.941556 | 3.105 | 0.940367 |
+| + Qwen8B dense retrieval on prior silent policy (ablation) | 1.000 | 0.937083 | 3.105 | 0.939025 |
+| + rank-1 turns 1-2, Top 10 from turn 3 | 1.000 | 0.949056 | 2.345 | 0.957817 |
+| **+ category suffix + retracted-context route (shipped)** | **1.000** | **0.951964** | **2.325** | **0.959089** |
+| + post-override provenance likelihood (opt-in) | 1.000 | 0.953978 | 2.320 | 0.959793 |
+| + filtered, override-gated Qwen dense fusion (opt-in) | 1.000 | 0.954395 | 2.320 | 0.959918 |
 
-The shipped deterministic path finds 200/200 targets, 180 of them at rank 1.
+The shipped deterministic path finds 200/200 targets, 186 of them at rank 1.
 Facet-diverse exploration recovers the formerly missed ambiguous item without
-changing the evaluator. The largest single gain came from withholding the
-opening turns' recommendations so a session converts on accumulated evidence
-rather than on turn 1 -- see `docs/suppression_results.md`.
+changing the evaluator. Turns 1-2 expose only the best candidate while the agent
+gathers evidence; turn 3 onward exposes the full Top 10. This improves both MRR
+and time to conversion over the previous fully silent opening policy -- see
+`docs/suppression_results.md`.
 
-Semantic reranking was measured against the Anthropic API and **lowers** ranking
-quality (reciprocal rank 0.827 -> 0.760), so it stays disabled; see
-`docs/phase1_results.md`. Buying and browsing route through different retrieval
-weightings; see `docs/intent_routing_results.md`. The dense row records the
-earlier ablation and has not been rerun on top of the current policy.
+Unrestricted semantic retrieval lowers ranking quality, so it stays disabled by
+default. On the current progressive-opening agent, running filtered dense fusion
+for every track scored `0.957513`; restricting it to post-override turns scored
+`0.959918`, a small gain over the `0.959793` lexical/provenance configuration.
+See `docs/filtered_dense_results.md`. Buying and browsing route through different
+retrieval weightings; see `docs/intent_routing_results.md`.
 
 ## Architecture
 
@@ -42,7 +50,10 @@ Conversation state: category, constraints, overrides, intent, distilled profile
 │ lexical retrieval        │ identity + attribute index │
 └──────────────────────────┴─────────────────────────────┘
       ↓ weighted reciprocal-rank fusion (50:1:1)
-Ranked candidates → facet-diverse exhausted-state exploration → Top 10
+Ranked candidates → exact taxonomy suffix + weak historical-context route
+                  → optional post-override provenance likelihood
+                  → facet-diverse exhausted-state exploration
+                  → rank 1 on turns 1-2; Top 10 from turn 3
 ```
 
 The clarification policy separates natural-language focus from the structured
@@ -59,6 +70,8 @@ the deterministic policy.
 Dense retrieval supports ranking but does not override strong exact metadata
 matches. GPT-5.6 Luna rewriting and Qwen3-Reranker-8B are implemented as optional
 ablations; neither improved the validated final score, so both remain disabled.
+When enabled, Qwen dense retrieval waits until turn 3, scores only the top 1,000
+structured candidates, and by default runs only after a preference override.
 
 ## Setup
 
@@ -76,9 +89,18 @@ Create `.env`:
 OPENROUTER_API_KEY=your_key
 TECHJAM_LLM_ANSWER=0
 TECHJAM_LLM_INTENT=0
-TECHJAM_DENSE_RETRIEVAL=1
+TECHJAM_DENSE_RETRIEVAL=0
+TECHJAM_DENSE_FILTERED=1
+TECHJAM_DENSE_MIN_TURN=3
+TECHJAM_DENSE_CANDIDATE_POOL_SIZE=1000
+TECHJAM_DENSE_TRACKS=override
 TECHJAM_LLM_REWRITE=0
 TECHJAM_RERANK=0
+TECHJAM_RETRACTED_WEIGHT=0.25
+TECHJAM_EXACT_CATEGORY_SUFFIX_BONUS=0.5
+TECHJAM_RETRACTED_CONTEXT_WEIGHT=1.0
+TECHJAM_OVERRIDE_LIKELIHOOD=0
+TECHJAM_EARLY_RECOMMENDATION_LIMIT=1
 ```
 
 Never commit `.env`.
@@ -101,9 +123,9 @@ query vectors are reused locally.
 
 ### Use the Prebuilt Submission Asset
 
-The product index is distributed separately because generated artifacts are not
-tracked by Git. From the repository root, unpack `submission-assets.zip`; it
-restores the index at the correct relative path:
+The product index is packaged in the repository-root `submission-assets.zip`;
+the extracted generated cache remains ignored by Git. From the repository root,
+unpack the archive to restore the index at the correct relative path:
 
 ```bash
 unzip submission-assets.zip
@@ -117,8 +139,13 @@ export TECHJAM_SEMANTIC_INDEX_PATH=artifacts/semantic_cache/catalog_qwen3_embedd
 export TECHJAM_LLM_ANSWER=0
 export TECHJAM_LLM_INTENT=0
 export TECHJAM_DENSE_RETRIEVAL=1
+export TECHJAM_DENSE_FILTERED=1
+export TECHJAM_DENSE_MIN_TURN=3
+export TECHJAM_DENSE_CANDIDATE_POOL_SIZE=1000
+export TECHJAM_DENSE_TRACKS=override
 export TECHJAM_LLM_REWRITE=0
 export TECHJAM_RERANK=0
+export TECHJAM_OVERRIDE_LIKELIHOOD=1
 ```
 
 The index contains all 50,000 product vectors and does not need rebuilding.
@@ -129,17 +156,21 @@ dimensions, document schema, and index format before using the asset.
 ## Evaluate
 
 ```bash
-TECHJAM_DENSE_RETRIEVAL=1 \
-  .venv/bin/python -m evaluator.local_evaluator \
+.venv/bin/python -m evaluator.local_evaluator \
   --output artifacts/evaluation.json
 
 # Windows PowerShell
-$env:TECHJAM_DENSE_RETRIEVAL = "1"
 .venv\Scripts\python.exe -m evaluator.local_evaluator --output artifacts\latest_evaluation.json
 ```
 
-Run the deterministic offline fallback by setting
-`TECHJAM_DENSE_RETRIEVAL=0`.
+The validated default is deterministic and offline (`0.959089`). Enabling the
+post-override provenance route gives `0.959793`. Enabling it together with the
+filtered, override-gated Qwen route gives the best measured score, `0.959918`.
+Do not set `TECHJAM_DENSE_TRACKS=all`: applying semantic fusion to every track
+scored `0.957513`, below the offline path.
+
+Enable the optional post-override catalog-provenance reranker with
+`TECHJAM_OVERRIDE_LIKELIHOOD=1`; its validated public-set score is `0.959793`.
 
 ## Dashboard
 

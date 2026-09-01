@@ -1,5 +1,12 @@
 # Intent override: the retraction was the defect
 
+> Follow-up (2026-09-01): exact category suffix scoring plus a separate
+> retracted-context RRF route raises the current progressive-opening score to
+> `0.959089` and override MRR to `0.915278`. The opt-in catalog-provenance
+> likelihood reranker reaches `0.959793` / `0.928704`; see
+> `override_likelihood_results.md`. The results below document the earlier
+> strict-erasure investigation.
+
 Shipped: **0.938760 -> 0.940367**. `intent_override` MRR 0.8696 -> 0.8986,
 rank-1 24/30 -> 26/30. Hit rate 1.000 held.
 

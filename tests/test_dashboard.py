@@ -78,9 +78,11 @@ class DashboardServiceTest(unittest.TestCase):
             self.assertEqual(event["turn"], 1)
             self.assertEqual(event["ask_attribute"], "other")
             self.assertIn("fused_candidate_count", event["diagnostics"])
-            # The shipped policy withholds the opening turns and asks instead.
-            self.assertTrue(event["diagnostics"]["recommendations_suppressed"])
-            self.assertFalse(event["recommendations"])
+            # The shipped policy shows only rank 1 while gathering evidence.
+            self.assertTrue(event["diagnostics"]["gathering_turn"])
+            self.assertTrue(event["diagnostics"]["recommendations_narrowed"])
+            self.assertFalse(event["diagnostics"]["recommendations_suppressed"])
+            self.assertEqual(len(event["recommendations"]), 1)
 
 
 class ReplaySessionTest(unittest.TestCase):

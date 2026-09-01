@@ -69,6 +69,7 @@ class Product:
     attribute_text: str
     search_text: str
     atomic_values: set[str]
+    salient_values: tuple[str, ...]
     average_rating: float
     rating_number: int
 
@@ -87,6 +88,8 @@ class CatalogIndex:
         dynamic_truncation: bool = False,
         truncation_strong_evidence: int = 50,
         truncation_floor: int = 100,
+        retracted_context_weight: float = 0.0,
+        exact_category_suffix_bonus: float = 0.0,
     ) -> None:
         self.catalog_path = Path(catalog_path)
         self.slot_decay = slot_decay
@@ -97,6 +100,8 @@ class CatalogIndex:
         self.dynamic_truncation = dynamic_truncation
         self.truncation_strong_evidence = truncation_strong_evidence
         self.truncation_floor = truncation_floor
+        self.retracted_context_weight = retracted_context_weight
+        self.exact_category_suffix_bonus = exact_category_suffix_bonus
         self.products: dict[str, Product] = {}
         self.constraint_index: dict[str, set[str]] = defaultdict(set)
         self.connection = sqlite3.connect(":memory:")
@@ -136,10 +141,19 @@ class CatalogIndex:
                     values.insert(1, f"color: {color.group(1).casefold()}")
                 if product.get("price") not in (None, ""):
                     values.append(f"budget around ${product['price']}")
+                salient_values: list[str] = []
+                seen_values: set[str] = set()
+                for value in values:
+                    cleaned = clean_constraint(value)
+                    key = normalize(cleaned)
+                    if cleaned and key not in seen_values:
+                        salient_values.append(cleaned)
+                        seen_values.add(key)
+                if not salient_values and title:
+                    salient_values.append(clean_constraint(title))
                 atomic_values = {
-                    normalize(clean_constraint(value))
-                    for value in values
-                    if clean_constraint(value)
+                    normalize(value)
+                    for value in salient_values
                 }
 
                 self.products[parent_asin] = Product(
@@ -151,6 +165,7 @@ class CatalogIndex:
                     attribute_text=attribute_text,
                     search_text=search_text.casefold(),
                     atomic_values=atomic_values,
+                    salient_values=tuple(salient_values),
                     average_rating=float(product.get("average_rating") or 0.0),
                     rating_number=int(product.get("rating_number") or 0),
                 )
@@ -233,6 +248,13 @@ class CatalogIndex:
             factor *= 1.15
         return lambda base: max(self.truncation_floor, int(base * factor))
 
+    def exact_category_suffix(self, parent_asin: str, requested_category: str) -> bool:
+        """Whether the requested taxonomy path matches the product's last nodes."""
+        requested = normalize(requested_category)
+        values = self.products[parent_asin].category_values
+        suffix = normalize(" ".join(values[-2:]))
+        return bool(requested) and suffix == requested
+
     def retrieve(self, state: SessionState, limit: int = 10) -> list[str]:
         ranked, _ = self.retrieve_with_diagnostics(state, limit=limit)
         return ranked
@@ -307,13 +329,27 @@ class CatalogIndex:
         identity_ranked = self._fts(identity_terms, "OR", depth(600), identity_weights)
         attribute_ranked = self._fts(attribute_terms, "OR", depth(600), attribute_weights)
         broad_ranked = self._fts(query_terms, "OR", depth(800), balanced_weights)
+        retracted_terms = terms(
+            " ".join(item.value for item in state.superseded_constraints),
+            limit=24,
+        )
+        retracted_ranked = self._fts(
+            retracted_terms,
+            "OR",
+            depth(600),
+            attribute_weights,
+        )
 
         category_terms = set(terms(state.category or "", limit=12))
+
         def category_coverage(parent_asin: str) -> float:
             if not category_terms:
                 return 0.0
             product = self.products[parent_asin]
             return sum(term in product.identity_text.casefold() for term in category_terms) / len(category_terms)
+
+        def exact_category_suffix(parent_asin: str) -> float:
+            return float(self.exact_category_suffix(parent_asin, state.category or ""))
 
         exact_ranked = sorted(
             exact_counts,
@@ -339,6 +375,10 @@ class CatalogIndex:
             ("attribute_bm25", 1.5, attribute_ranked),
             ("broad_bm25", 0.5, broad_ranked),
         ]
+        if self.retracted_context_weight > 0.0 and retracted_ranked:
+            routes.append(
+                ("retracted_context", self.retracted_context_weight, retracted_ranked)
+            )
         candidates: set[str] = set()
         for _, _, ranking in routes:
             candidates.update(ranking)
@@ -398,6 +438,7 @@ class CatalogIndex:
                 + (4.0 * w_inter if parent_asin in intersection else 0.0)
                 + 2.0 * w_route * route_bonus[parent_asin]
                 + 1.5 * w_category * category_coverage(parent_asin)
+                + self.exact_category_suffix_bonus * exact_category_suffix(parent_asin)
                 + 0.15 * profile_coverage
                 - 0.25 * avoidance_coverage
                 + quality_prior
@@ -451,6 +492,9 @@ class CatalogIndex:
             "intersection_candidate_count": len(intersection),
             "bm25_and_candidate_count": len(strict_ranked),
             "bm25_or_candidate_count": len(broad_ranked),
+            "retracted_context_candidate_count": len(retracted_ranked),
+            "exact_category_suffix_bonus": self.exact_category_suffix_bonus,
+            "retracted_context_weight": self.retracted_context_weight,
             "fused_candidate_count": len(candidates),
             "fused_top1_score": top1,
             "fused_top2_score": top2,
