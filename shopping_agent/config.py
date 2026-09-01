@@ -39,6 +39,9 @@ class RetrievalSettings:
     dense_min_turn: int
     dense_candidate_pool_size: int
     dense_tracks: tuple[str, ...]
+    dense_ambiguity_gate: bool
+    dense_ambiguity_margin: float
+    dense_ambiguity_min_pool: int
     rerank_enabled: bool
     slot_decay: float
     intent_routing_scale: float
@@ -101,6 +104,13 @@ class RetrievalSettings:
                 value.strip().casefold()
                 for value in os.environ.get("TECHJAM_DENSE_TRACKS", "override").split(",")
                 if value.strip()
+            ),
+            dense_ambiguity_gate=_enabled("TECHJAM_DENSE_AMBIGUITY_GATE"),
+            dense_ambiguity_margin=max(
+                0.0, float(os.environ.get("TECHJAM_DENSE_AMBIGUITY_MARGIN", "0.02"))
+            ),
+            dense_ambiguity_min_pool=max(
+                1, int(os.environ.get("TECHJAM_DENSE_AMBIGUITY_MIN_POOL", "100"))
             ),
             rerank_enabled=_enabled("TECHJAM_RERANK"),
             slot_decay=float(os.environ.get("TECHJAM_SLOT_DECAY", "0.9")),

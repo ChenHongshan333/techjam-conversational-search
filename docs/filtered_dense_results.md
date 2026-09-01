@@ -41,3 +41,38 @@ The generated evaluation files are ignored local artifacts:
 
 - `artifacts/filtered_dense_turn3_evaluation.json`
 - `artifacts/filtered_dense_override_evaluation.json`
+
+## Ambiguity-gated browsing experiment
+
+After exposure-aware ranking became the offline default, browsing dense
+retrieval was retested behind an ambiguity gate. The gate allows Qwen retrieval
+when a browsing turn contains natural-language semantic evidence, or when the
+structured candidate pool is broad and its fused top-rank margin is at most
+`0.02`. Confident catalog-exact turns remain lexical.
+
+| Configuration | Public score | Diagnostic score | Public browsing MRR |
+|---|---:|---:|---:|
+| Offline exposure-aware baseline | 0.963656 | 0.940612 | 0.975000 |
+| Dense on every browsing turn | 0.962469 | 0.940612 | 0.968229 |
+| **Ambiguity-gated browsing dense** | **0.963656** | **0.940612** | **0.975000** |
+
+The gated route actually ran on 14 public browsing turns, so the unchanged
+score is not caused by skipping the semantic branch entirely. It avoided all
+three regressions caused by unrestricted browsing fusion. It did not recover
+`diagnostic_0087`: filtered and global Qwen search both missed that target,
+confirming that case is an exploration problem inside a metadata-identical
+group rather than a semantic-recall failure.
+
+The experimental configuration is:
+
+```ini
+TECHJAM_DENSE_RETRIEVAL=1
+TECHJAM_DENSE_TRACKS=browsing
+TECHJAM_DENSE_FILTERED=1
+TECHJAM_DENSE_AMBIGUITY_GATE=1
+TECHJAM_DENSE_AMBIGUITY_MARGIN=0.02
+TECHJAM_DENSE_AMBIGUITY_MIN_POOL=100
+```
+
+Diagnostics now report `hybrid_semantic_diversity` only when dense retrieval
+actually ran; browsing turns that stayed lexical report `lexical_exploration`.

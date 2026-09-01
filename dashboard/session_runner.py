@@ -14,6 +14,12 @@ from evaluator.local_evaluator import (
 )
 from shopping_agent import ShoppingAgent
 
+from .explanations import (
+    build_intent_summary,
+    build_product_explanation,
+    build_ranking_explanation,
+)
+
 
 @dataclass
 class ReplaySession:
@@ -54,6 +60,7 @@ class ReplaySession:
             "sample_id": self.sample["sample_id"],
             "scenario_type": self.sample["scenario_type"],
             "difficulty_bucket": self.sample.get("difficulty_bucket"),
+            "user_profile": self.sample.get("user_profile") or {},
             "turn": self.turn,
             "max_turns": MAX_TURNS,
             "current_user_message": self.user_message,
@@ -80,13 +87,22 @@ class ReplaySession:
             self.hit_turn = self.turn
             self.finished = True
 
+        diagnostics = self.agent.get_diagnostics(self.session_id)
         recommendation_rows = []
         for rank, parent_asin in enumerate(ranked, start=1):
             product = self.products.get(parent_asin) or {}
+            category_match = self.agent.catalog.exact_category_suffix(
+                parent_asin,
+                str(diagnostics.get("category") or ""),
+            )
             recommendation_rows.append({
                 "rank": rank,
                 "parent_asin": parent_asin,
                 "title": product.get("title") or parent_asin,
+                "categories": product.get("categories") or [],
+                "average_rating": product.get("average_rating") or 0.0,
+                "rating_number": product.get("rating_number") or 0,
+                "explanation": build_product_explanation(product, diagnostics, category_match),
                 "is_target": parent_asin == self.target,
                 "is_scored_hit": scored_hit and parent_asin == self.target,
             })
@@ -118,7 +134,9 @@ class ReplaySession:
             "agent_message": response.get("message", ""),
             "ask_attribute": response.get("ask_attribute"),
             "recommendations": recommendation_rows,
-            "diagnostics": self.agent.get_diagnostics(self.session_id),
+            "diagnostics": diagnostics,
+            "intent": build_intent_summary(self.sample["scenario_type"], diagnostics),
+            "ranking_explanation": build_ranking_explanation(diagnostics, recommendation_rows),
             "contains_target": contains_target,
             "scored_hit": scored_hit,
             "override_applied": self.override_applied,

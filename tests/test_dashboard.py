@@ -72,8 +72,10 @@ class DashboardServiceTest(unittest.TestCase):
             service = DashboardService(catalog_path, dataset_path)
             cases = service.list_test_cases(scenario="browsing")
             self.assertEqual(cases[0]["sample_id"], "public_test")
+            self.assertEqual(service.product_views["TARGET"]["features"][0], "leather")
 
             session = service.create_session("public_test")
+            self.assertEqual(session.snapshot()["user_profile"]["rating_style"], "usually positive")
             event = session.step()
             self.assertEqual(event["turn"], 1)
             self.assertEqual(event["ask_attribute"], "other")
@@ -83,6 +85,9 @@ class DashboardServiceTest(unittest.TestCase):
             self.assertTrue(event["diagnostics"]["recommendations_narrowed"])
             self.assertFalse(event["diagnostics"]["recommendations_suppressed"])
             self.assertEqual(len(event["recommendations"]), 1)
+            self.assertEqual(event["intent"]["label"], "Exploring options")
+            self.assertIn("profile", event["ranking_explanation"]["profile_note"].casefold())
+            self.assertTrue(event["recommendations"][0]["explanation"]["reasons"])
 
 
 class ReplaySessionTest(unittest.TestCase):

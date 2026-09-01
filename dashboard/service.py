@@ -30,10 +30,19 @@ class DashboardService:
             parent_asin: {
                 "parent_asin": product.parent_asin,
                 "title": product.title,
+                "categories": product.category_values,
+                "average_rating": product.average_rating,
+                "rating_number": product.rating_number,
+                "atomic_values": sorted(product.atomic_values),
+                "salient_values": list(product.salient_values[:12]),
             }
             for parent_asin, product in self.agent.catalog.products.items()
         }
-        self.product_views.update(self.target_products)
+        for parent_asin, raw_product in self.target_products.items():
+            self.product_views[parent_asin] = {
+                **raw_product,
+                **self.product_views[parent_asin],
+            }
         self.sessions: dict[str, ReplaySession] = {}
 
     def _load_target_products(self) -> dict[str, dict]:

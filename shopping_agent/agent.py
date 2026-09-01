@@ -141,6 +141,9 @@ class ShoppingAgent:
             "dense_filtered": self.settings.dense_filtered,
             "dense_min_turn": self.settings.dense_min_turn,
             "dense_tracks": list(self.settings.dense_tracks),
+            "dense_ambiguity_gate": self.settings.dense_ambiguity_gate,
+            "dense_ambiguity_gate_passed": True,
+            "dense_ambiguity_gate_reason": "disabled",
             "dense_candidate_pool_count": 0,
             "dense_retrieval_error": None,
             "dense_identity_candidate_count": 0,
@@ -155,10 +158,18 @@ class ShoppingAgent:
         )
         semantic_diagnostics["dense_active_track"] = dense_track
         semantic_diagnostics["dense_track_allowed"] = dense_track_allowed
+        dense_gate_passed, dense_gate_reason = self._dense_ambiguity_decision(
+            state,
+            dense_track,
+            retrieval_diagnostics,
+        )
+        semantic_diagnostics["dense_ambiguity_gate_passed"] = dense_gate_passed
+        semantic_diagnostics["dense_ambiguity_gate_reason"] = dense_gate_reason
         if (
             self.dense_retriever is not None
             and turn >= self.settings.dense_min_turn
             and dense_track_allowed
+            and dense_gate_passed
         ):
             dense_candidates = (
                 ranked_pool[:self.settings.dense_candidate_pool_size]
@@ -331,10 +342,19 @@ class ShoppingAgent:
             "intent_source": state.intent_source,
             "intent_reason": intent.reason,
             "intent_error": intent.error,
-            "intent_retrieval_mode": {
-                "buying": "precision",
-                "browsing": "semantic_diversity",
-            }.get(state.intent_mode, "conservative"),
+            "intent_retrieval_mode": (
+                "hybrid_semantic_diversity"
+                if state.intent_mode == "browsing"
+                and semantic_diagnostics["dense_retrieval_applied"]
+                else "lexical_exploration"
+                if state.intent_mode == "browsing"
+                else "hybrid_precision"
+                if state.intent_mode == "buying"
+                and semantic_diagnostics["dense_retrieval_applied"]
+                else "lexical_precision"
+                if state.intent_mode == "buying"
+                else "conservative"
+            ),
             "answer_source": answer.source,
             "answer_confidence": answer.confidence,
             "answer_error": answer.error,
@@ -399,6 +419,35 @@ class ShoppingAgent:
                 "completion_tokens": completion_tokens,
             },
         }
+
+    def _dense_ambiguity_decision(
+        self,
+        state: SessionState,
+        dense_track: str,
+        diagnostics: dict,
+    ) -> tuple[bool, str]:
+        """Gate browsing embeddings to turns where semantics can add evidence.
+
+        Structured catalog values are already handled more precisely by exact
+        matching and BM25. Dense retrieval is useful when the user supplied
+        natural-language evidence, or when the structured ranking remains both
+        broad and low-margin. Other intent tracks retain their configured gate.
+        """
+        settings = self.settings
+        if not settings.dense_ambiguity_gate or dense_track != "browsing":
+            return True, "disabled_or_non_browsing"
+
+        if state.last_answer_source != "fixed" or state.profile_preferences:
+            return True, "natural_semantic_evidence"
+
+        pool_size = int(diagnostics.get("fused_candidate_count") or 0)
+        relative_margin = float(diagnostics.get("fused_relative_margin") or 0.0)
+        if (
+            pool_size >= settings.dense_ambiguity_min_pool
+            and relative_margin <= settings.dense_ambiguity_margin
+        ):
+            return True, "broad_low_margin_ranking"
+        return False, "structured_ranking_confident"
 
     def _demote_exposed(
         self,

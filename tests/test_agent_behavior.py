@@ -297,6 +297,9 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(settings.dense_min_turn, 3)
         self.assertEqual(settings.dense_candidate_pool_size, 1000)
         self.assertEqual(settings.dense_tracks, ("override",))
+        self.assertFalse(settings.dense_ambiguity_gate)
+        self.assertEqual(settings.dense_ambiguity_margin, 0.02)
+        self.assertEqual(settings.dense_ambiguity_min_pool, 100)
         self.assertTrue(settings.remote_enabled)
         self.assertEqual(settings.retracted_weight, 0.25)
         self.assertEqual(settings.retracted_context_weight, 1.0)
@@ -625,6 +628,73 @@ class AgentTest(unittest.TestCase):
             self.assertEqual(len(dense.calls), 1)
             self.assertEqual(set(dense.calls[0][2] or []), {"TARGET", "OTHER"})
             self.assertTrue(agent.get_diagnostics("filtered")["dense_retrieval_applied"])
+
+    def test_browsing_dense_ambiguity_gate_skips_confident_structured_turn(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = without_suppression(ShoppingAgent(write_catalog(directory)))
+            dense = FakeDenseRetriever()
+            agent.dense_retriever = dense
+            agent.settings = replace(
+                agent.settings,
+                dense_min_turn=1,
+                dense_tracks=("browsing",),
+                dense_ambiguity_gate=True,
+                dense_ambiguity_margin=0.0,
+                dense_ambiguity_min_pool=1,
+            )
+
+            agent.reset("confident", {})
+            agent.respond(
+                "confident",
+                "I'm looking for Shoes, but I'm still exploring.",
+                turn=1,
+                top_k=10,
+            )
+            self.assertEqual(dense.calls, [])
+            diagnostics = agent.get_diagnostics("confident")
+            self.assertFalse(diagnostics["dense_retrieval_applied"])
+            self.assertEqual(
+                diagnostics["intent_retrieval_mode"], "lexical_exploration"
+            )
+
+    def test_browsing_dense_ambiguity_gate_accepts_natural_semantic_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = without_suppression(ShoppingAgent(write_catalog(directory)))
+            dense = FakeDenseRetriever()
+            agent.dense_retriever = dense
+            agent.settings = replace(
+                agent.settings,
+                dense_min_turn=1,
+                dense_tracks=("browsing",),
+                dense_ambiguity_gate=True,
+                dense_ambiguity_margin=0.0,
+                dense_ambiguity_min_pool=10000,
+            )
+
+            agent.reset("natural-browse", {})
+            agent.respond(
+                "natural-browse",
+                "I'm looking for Shoes, but I'm still exploring.",
+                turn=1,
+                top_k=10,
+            )
+            agent.respond(
+                "natural-browse",
+                "I want a black leather boot for winter hiking.",
+                turn=2,
+                top_k=10,
+            )
+            self.assertEqual(len(dense.calls), 1)
+            diagnostics = agent.get_diagnostics("natural-browse")
+            self.assertTrue(diagnostics["dense_retrieval_applied"])
+            self.assertEqual(
+                diagnostics["dense_ambiguity_gate_reason"],
+                "natural_semantic_evidence",
+            )
+            self.assertEqual(
+                diagnostics["intent_retrieval_mode"],
+                "hybrid_semantic_diversity",
+            )
 
     def test_catalog_resolves_semicolons_inside_a_single_feature(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
