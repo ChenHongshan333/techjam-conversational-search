@@ -4,6 +4,23 @@
   <img src="dashboard/static/seekly-logo.png" alt="Seekly logo" width="360">
 </p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/TechJam-2026-FF6B35?style=flat-square">
+  <img src="https://img.shields.io/badge/Hit%20Rate%4010-1.000-2EA44F?style=flat-square">
+  <img src="https://img.shields.io/badge/MRR-0.965853-2EA44F?style=flat-square">
+  <img src="https://img.shields.io/badge/TechnicalScore-0.9637-8A2BE2?style=flat-square">
+  <img src="https://img.shields.io/badge/Winning%20Run-Offline%20%26%20Zero--Cost-0078D4?style=flat-square">
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white">
+  <img src="https://img.shields.io/badge/Retrieval-BM25%20%2B%20RRF-005571?style=flat-square">
+  <img src="https://img.shields.io/badge/LLM-GPT--5.6%20Luna-000000?style=flat-square&logo=openai&logoColor=white">
+  <img src="https://img.shields.io/badge/Qwen-Embedding%20%2B%20Reranking-6C5CE7?style=flat-square">
+</p>
+
+
+
 **A profile-distilling, intent-aware shopping agent for the TechJam 2026
 Conversational E-Commerce Search Challenge.**
 
