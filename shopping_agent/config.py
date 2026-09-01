@@ -57,6 +57,9 @@ class RetrievalSettings:
     suppression_turns: int
     suppression_reserve_turns: int
     early_recommendation_limit: int
+    recommendation_policy: str
+    exposure_demotion_enabled: bool
+    exposure_rank_penalty: float
     rewrite_model: str
     embedding_model: str
     rerank_model: str
@@ -111,7 +114,9 @@ class RetrievalSettings:
             exact_category_suffix_bonus=float(
                 os.environ.get("TECHJAM_EXACT_CATEGORY_SUFFIX_BONUS", "0.5")
             ),
-            override_likelihood_enabled=_enabled("TECHJAM_OVERRIDE_LIKELIHOOD"),
+            override_likelihood_enabled=_enabled(
+                "TECHJAM_OVERRIDE_LIKELIHOOD", True
+            ),
             constraint_lock=_enabled("TECHJAM_CONSTRAINT_LOCK", True),
             lock_tracks=tuple(
                 value.strip()
@@ -132,6 +137,13 @@ class RetrievalSettings:
             ),
             early_recommendation_limit=max(
                 0, int(os.environ.get("TECHJAM_EARLY_RECOMMENDATION_LIMIT", "1"))
+            ),
+            recommendation_policy=os.environ.get(
+                "TECHJAM_RECOMMENDATION_POLICY", "current"
+            ).strip().casefold(),
+            exposure_demotion_enabled=_enabled("TECHJAM_EXPOSURE_DEMOTION", True),
+            exposure_rank_penalty=max(
+                0.0, float(os.environ.get("TECHJAM_EXPOSURE_RANK_PENALTY", "10"))
             ),
             rewrite_model=os.environ.get("TECHJAM_REWRITE_MODEL", "openai/gpt-5.6-luna"),
             embedding_model=os.environ.get("TECHJAM_EMBEDDING_MODEL", "qwen/qwen3-embedding-8b"),

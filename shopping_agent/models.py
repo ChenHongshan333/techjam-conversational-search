@@ -35,6 +35,7 @@ class SessionState:
     asked_attributes: list[str] = field(default_factory=list)
     previous_recommendations: list[str] = field(default_factory=list)
     seen_recommendations: set[str] = field(default_factory=set)
+    recommendation_exposures: dict[str, int] = field(default_factory=dict)
     last_query_signature: tuple[str, ...] | None = None
     override_seen: bool = False
     intent_mode: str = "uncertain"

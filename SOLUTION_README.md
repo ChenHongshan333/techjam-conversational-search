@@ -20,16 +20,29 @@ Validated on all 200 public sessions:
 | + weak retracted-preference evidence | 1.000 | 0.941556 | 3.105 | 0.940367 |
 | + Qwen8B dense retrieval on prior silent policy (ablation) | 1.000 | 0.937083 | 3.105 | 0.939025 |
 | + rank-1 turns 1-2, Top 10 from turn 3 | 1.000 | 0.949056 | 2.345 | 0.957817 |
-| **+ category suffix + retracted-context route (shipped)** | **1.000** | **0.951964** | **2.325** | **0.959089** |
+| + category suffix + retracted-context route | 1.000 | 0.951964 | 2.325 | 0.959089 |
 | + post-override provenance likelihood (opt-in) | 1.000 | 0.953978 | 2.320 | 0.959793 |
 | + filtered, override-gated Qwen dense fusion (opt-in) | 1.000 | 0.954395 | 2.320 | 0.959918 |
+| **+ exposure demotion + override provenance (shipped)** | **1.000** | **0.965853** | **2.305** | **0.963656** |
 
-The shipped deterministic path finds 200/200 targets, 186 of them at rank 1.
+The shipped deterministic path finds 200/200 targets. Previously exposed
+products receive a recoverable rank penalty on later turns, so fresh candidates
+can surface without permanently deleting any product; exposure state resets on
+an intent override.
 Facet-diverse exploration recovers the formerly missed ambiguous item without
 changing the evaluator. Turns 1-2 expose only the best candidate while the agent
 gathers evidence; turn 3 onward exposes the full Top 10. This improves both MRR
 and time to conversion over the previous fully silent opening policy -- see
 `docs/suppression_results.md`.
+
+An additional deterministic 100-case catalog-derived holdout uses unseen target
+products and the same 40/40/15/5 scenario proportions. The current
+offline/provenance configuration scores `0.940612` with 99/100 hits; the 83
+cases whose disclosed evidence narrows to at most ten products score `0.954854`.
+Filtered Qwen retrieval changed none of the 100 outcomes. See
+`docs/diagnostic_holdout_results.md` for construction, failure analysis, and an
+unshipped exploration-quota ablation that recovers the miss without changing
+the public score.
 
 Unrestricted semantic retrieval lowers ranking quality, so it stays disabled by
 default. On the current progressive-opening agent, running filtered dense fusion
@@ -99,8 +112,11 @@ TECHJAM_RERANK=0
 TECHJAM_RETRACTED_WEIGHT=0.25
 TECHJAM_EXACT_CATEGORY_SUFFIX_BONUS=0.5
 TECHJAM_RETRACTED_CONTEXT_WEIGHT=1.0
-TECHJAM_OVERRIDE_LIKELIHOOD=0
+TECHJAM_OVERRIDE_LIKELIHOOD=1
 TECHJAM_EARLY_RECOMMENDATION_LIMIT=1
+TECHJAM_RECOMMENDATION_POLICY=current
+TECHJAM_EXPOSURE_DEMOTION=1
+TECHJAM_EXPOSURE_RANK_PENALTY=10
 ```
 
 Never commit `.env`.
@@ -163,14 +179,12 @@ dimensions, document schema, and index format before using the asset.
 .venv\Scripts\python.exe -m evaluator.local_evaluator --output artifacts\latest_evaluation.json
 ```
 
-The validated default is deterministic and offline (`0.959089`). Enabling the
-post-override provenance route gives `0.959793`. Enabling it together with the
-filtered, override-gated Qwen route gives the best measured score, `0.959918`.
+The validated default is deterministic and offline (`0.963656`). It combines
+recoverable exposure demotion with the post-override provenance route. Enabling
+filtered, override-gated Qwen retrieval is optional and is not required for the
+best measured configuration.
 Do not set `TECHJAM_DENSE_TRACKS=all`: applying semantic fusion to every track
 scored `0.957513`, below the offline path.
-
-Enable the optional post-override catalog-provenance reranker with
-`TECHJAM_OVERRIDE_LIKELIHOOD=1`; its validated public-set score is `0.959793`.
 
 ## Dashboard
 

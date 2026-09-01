@@ -96,6 +96,16 @@ class ShoppingAgent:
             constraint_resolver=self.catalog.resolve_constraint_payload,
             parsed=answer.parsed,
         )
+        exposure_reset = False
+        if answer.parsed.override and self.settings.exposure_demotion_enabled:
+            # Products exposed under a superseded intent are not negative
+            # evidence for the replacement intent. Reset only the exposure
+            # state; the conversation-state layer separately erases the old
+            # volunteered constraint.
+            state.previous_recommendations.clear()
+            state.seen_recommendations.clear()
+            state.recommendation_exposures.clear()
+            exposure_reset = True
         state.gained_information = len(state.active_constraints) > constraints_before
         state.last_answer_source = answer.source
         state.last_answer_confidence = answer.confidence
@@ -218,6 +228,7 @@ class ShoppingAgent:
                 override_likelihood.exact_context_candidates
             ),
         })
+        ranked_pool, exposure_demoted = self._demote_exposed(ranked_pool, state)
         query_signature = (
             state.category or "",
             *(f"{item.attribute}:{item.value.casefold()}" for item in state.active_constraints),
@@ -280,12 +291,37 @@ class ShoppingAgent:
 
         if suppressed:
             state.suppressed_turns += 1
+
+        policy_limit: int | None = None
+        if not (suppressed and not recommendations):
+            policy_limit = self._recommendation_limit(
+                state,
+                turn,
+                top_k,
+                question_plan.ask_attribute,
+                retrieval_diagnostics,
+            )
+            if policy_limit is not None:
+                # Preserve a facet-diverse ordering when rotation is active;
+                # otherwise take the precision head of the exposure-adjusted
+                # fused ranking.
+                recommendations = (
+                    recommendations[:policy_limit]
+                    if rotating
+                    else ranked_pool[:policy_limit]
+                )
+
         recommendations_suppressed = suppressed and not recommendations
+        active_limit = policy_limit if policy_limit is not None else early_limit
         recommendations_narrowed = (
-            early_limit is not None and len(ranked_pool) > early_limit
+            active_limit is not None and len(ranked_pool) > active_limit
         )
         state.previous_recommendations = recommendations
         state.seen_recommendations.update(recommendations)
+        for parent_asin in recommendations:
+            state.recommendation_exposures[parent_asin] = (
+                state.recommendation_exposures.get(parent_asin, 0) + 1
+            )
         state.last_query_signature = query_signature
         self.diagnostics[session_id] = {
             "category": state.category,
@@ -335,11 +371,15 @@ class ShoppingAgent:
             "profile_preferences": list(state.profile_preferences),
             "profile_avoidances": list(state.profile_avoidances),
             "seen_recommendation_count": len(state.seen_recommendations),
+            "exposure_demotion_enabled": self.settings.exposure_demotion_enabled,
+            "exposure_demoted_count": exposure_demoted,
+            "exposure_reset_on_override": exposure_reset,
+            "recommendation_policy": self.settings.recommendation_policy,
             "fused_pool_size": len(ranked_pool),
             "gathering_turn": suppressed,
             "recommendations_suppressed": recommendations_suppressed,
             "recommendations_narrowed": recommendations_narrowed,
-            "recommendation_limit": early_limit if early_limit is not None else top_k,
+            "recommendation_limit": active_limit if active_limit is not None else top_k,
             "overload_cutoffs": state.overload_cutoffs,
             "suppressed_turns": state.suppressed_turns,
             "gained_information": state.gained_information,
@@ -359,6 +399,76 @@ class ShoppingAgent:
                 "completion_tokens": completion_tokens,
             },
         }
+
+    def _demote_exposed(
+        self,
+        ranking: list[str],
+        state: SessionState,
+    ) -> tuple[list[str], int]:
+        """Apply a recoverable rank-space penalty to previously exposed items.
+
+        This is intentionally softer than deleting a product: newly accumulated
+        evidence can still pull an exposed candidate back into the visible head.
+        The default configuration leaves the ranking byte-for-byte unchanged.
+        """
+        settings = self.settings
+        if (
+            not settings.exposure_demotion_enabled
+            or settings.exposure_rank_penalty <= 0.0
+            or not state.recommendation_exposures
+        ):
+            return ranking, 0
+
+        indexed = list(enumerate(ranking))
+        demoted = sum(
+            1 for _, parent_asin in indexed
+            if state.recommendation_exposures.get(parent_asin, 0) > 0
+        )
+        indexed.sort(key=lambda item: (
+            item[0]
+            + settings.exposure_rank_penalty
+            * state.recommendation_exposures.get(item[1], 0),
+            item[0],
+        ))
+        return [parent_asin for _, parent_asin in indexed], demoted
+
+    def _recommendation_limit(
+        self,
+        state: SessionState,
+        turn: int,
+        top_k: int,
+        ask_attribute: str | None,
+        diagnostics: dict,
+    ) -> int | None:
+        """Return an experimental disclosure width, or None for shipped policy.
+
+        ``adaptive`` narrows only while another useful clarification remains,
+        then widens for coverage. ``sequential`` is retained as an explicit
+        benchmark ablation of L-GPT's one-at-a-time schedule; it is not the
+        compliance-first policy.
+        """
+        policy = self.settings.recommendation_policy
+        if policy == "current":
+            return None
+        if turn >= 10:
+            return top_k
+        if policy == "sequential":
+            return min(1, top_k)
+        if policy != "adaptive":
+            return None
+
+        exhausted = state.information_exhausted or "other" in state.rejected_attributes
+        if exhausted or ask_attribute is None:
+            return top_k
+
+        relative_margin = float(diagnostics.get("fused_relative_margin") or 0.0)
+        intersection = int(diagnostics.get("intersection_candidate_count") or 0)
+        pool_size = int(diagnostics.get("fused_candidate_count") or 0)
+        high_confidence = relative_margin >= 0.02 or 0 < intersection <= 3
+        overloaded = pool_size >= 500
+        if high_confidence or overloaded or state.gained_information:
+            return min(1, top_k)
+        return min(3, top_k)
 
     def _suppress(self, state: SessionState, turn: int, pool_size: int = 0) -> bool:
         """Decide whether to withhold this turn's recommendations.

@@ -301,8 +301,11 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(settings.retracted_weight, 0.25)
         self.assertEqual(settings.retracted_context_weight, 1.0)
         self.assertEqual(settings.exact_category_suffix_bonus, 0.5)
-        self.assertFalse(settings.override_likelihood_enabled)
+        self.assertTrue(settings.override_likelihood_enabled)
         self.assertEqual(settings.early_recommendation_limit, 1)
+        self.assertEqual(settings.recommendation_policy, "current")
+        self.assertTrue(settings.exposure_demotion_enabled)
+        self.assertEqual(settings.exposure_rank_penalty, 10.0)
 
 
 class ExplorationTest(unittest.TestCase):
@@ -805,6 +808,74 @@ class ProgressiveRecommendationTest(unittest.TestCase):
             )
         self.assertFalse(first["recommendations"])
         self.assertTrue(agent.get_diagnostics("silent")["recommendations_suppressed"])
+
+
+class ExposureAwareRecommendationTest(unittest.TestCase):
+    def build(self, directory: str, policy: str = "sequential") -> ShoppingAgent:
+        agent = ShoppingAgent(ProgressiveRecommendationTest().write_wide_catalog(directory))
+        agent.settings = replace(
+            agent.settings,
+            suppression_enabled=False,
+            recommendation_policy=policy,
+            exposure_demotion_enabled=True,
+            exposure_rank_penalty=1000.0,
+        )
+        return agent
+
+    def test_continuation_promotes_a_fresh_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.build(directory)
+            agent.reset("exposure", {})
+            first = agent.respond(
+                "exposure", "I'm looking for women's boots, but I'm still exploring.", 1, 10
+            )
+            second = agent.respond(
+                "exposure",
+                "Those options are not quite right yet. Ask me about one specific attribute.",
+                2,
+                10,
+            )
+        self.assertNotEqual(first["recommendations"], second["recommendations"])
+        self.assertGreater(agent.get_diagnostics("exposure")["exposure_demoted_count"], 0)
+
+    def test_override_resets_old_intent_exposure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.build(directory)
+            agent.reset("override-exposure", {})
+            first = agent.respond(
+                "override-exposure",
+                "I'm looking for women's boots, but I'm still exploring.",
+                1,
+                10,
+            )
+            replacement = agent.respond(
+                "override-exposure",
+                "Actually, ignore my earlier preference. What I need is: genuine leather.",
+                2,
+                10,
+            )
+        self.assertEqual(first["recommendations"], replacement["recommendations"])
+        self.assertTrue(agent.get_diagnostics("override-exposure")["exposure_reset_on_override"])
+
+    def test_adaptive_policy_widens_when_information_is_exhausted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            agent = self.build(directory, policy="adaptive")
+            agent.reset("adaptive", {})
+            first = agent.respond(
+                "adaptive", "I'm looking for women's boots, but I'm still exploring.", 1, 10
+            )
+            exhausted = agent.respond(
+                "adaptive",
+                "I don't have an additional preference for other.",
+                2,
+                10,
+            )
+        # With a small, low-margin pool and no hard evidence, the adaptive
+        # policy exposes a cautious shortlist rather than pretending rank 1 is
+        # confident. It still widens fully once the customer has no more input.
+        self.assertEqual(len(first["recommendations"]), 3)
+        self.assertEqual(len(exhausted["recommendations"]), 10)
+        self.assertEqual(agent.get_diagnostics("adaptive")["recommendation_limit"], 10)
 
 
 class SuppressionExhaustionTest(unittest.TestCase):
