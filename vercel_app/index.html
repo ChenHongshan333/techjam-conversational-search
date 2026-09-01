@@ -6,6 +6,19 @@
   <meta name="description" content="Seekly conversational shopping agent and evaluation studio.">
   <title>Seekly · Conversational Shopping</title>
   <link rel="stylesheet" href="/styles.css">
+  <style>
+    .hosted-delay-note {
+      margin: -10px 0 20px;
+      padding: 11px 14px;
+      border: 1px solid #e4ddc8;
+      border-radius: 12px;
+      background: #fffaf0;
+      color: #665b42;
+      font-size: 12px;
+      line-height: 1.55;
+    }
+    .hosted-delay-note strong { color: #1b1b19; }
+  </style>
 </head>
 <body>
   <header class="site-header">
@@ -76,6 +89,10 @@
           <button id="start-case" class="button button-primary">Start conversation</button>
         </div>
       </div>
+
+      <p class="hosted-delay-note" role="note">
+        <strong>Vercel demo notice:</strong> starting a conversation may take 20–30 seconds while the 50,000-product catalog initializes. The locally hosted dashboard does not have this serverless delay.
+      </p>
 
       <div id="case-meta" class="case-meta hidden"></div>
 

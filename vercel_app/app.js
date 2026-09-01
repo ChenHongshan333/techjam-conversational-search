@@ -95,17 +95,26 @@ async function loadTestCases() {
 async function startReplay() {
   const sampleId = $("#case-select").value;
   if (!sampleId) return;
-  setFooter("Starting conversation");
-  const payload = await request("/api/replay", {
-    method: "POST",
-    body: JSON.stringify({ sample_id: sampleId }),
-  });
-  state.session = payload.initial;
-  state.replayEvents = payload.events || [];
-  state.replayIndex = 0;
-  state.finalSnapshot = payload.snapshot;
-  renderSession(payload.initial);
-  setFooter("Conversation ready");
+  const startButton = $("#start-case");
+  const originalLabel = startButton.textContent;
+  startButton.disabled = true;
+  startButton.textContent = "Starting · allow 20–30s";
+  setFooter("Initializing hosted catalog · local dashboard has no delay");
+  try {
+    const payload = await request("/api/replay", {
+      method: "POST",
+      body: JSON.stringify({ sample_id: sampleId }),
+    });
+    state.session = payload.initial;
+    state.replayEvents = payload.events || [];
+    state.replayIndex = 0;
+    state.finalSnapshot = payload.snapshot;
+    renderSession(payload.initial);
+    setFooter("Conversation ready");
+  } finally {
+    startButton.disabled = false;
+    startButton.textContent = originalLabel;
+  }
 }
 
 function renderSession(snapshot) {

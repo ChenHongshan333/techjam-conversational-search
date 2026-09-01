@@ -34,8 +34,32 @@ index is required to reproduce the best public result.
 
 ![Seekly dashboard overview](docs/screenshots/seekly-overview.png)
 
+## Live demo
+
+**[Open the deployed Seekly shopping-agent demo](https://techjam-conversational-search.vercel.app/)**
+
+The Vercel deployment is an optional, isolated presentation layer. It uses the
+same deterministic Agent and participant-visible 50,000-product catalog, but it
+does not replace or modify the competition entry point. No OpenRouter key,
+model download, or dense index is required.
+
+The live site includes all 200 public test cases, turn-by-turn and automatic
+conversation playback, distilled customer profiles, intent classification,
+ranked recommendations, transparent ranking evidence, and the validated
+per-scenario metrics. A production smoke test on `public_0001` retrieved the
+target at turn 2, rank 1, with a per-session score of `0.980`.
+
+The first replay in a cold serverless instance may take approximately 20–30
+seconds while Vercel prepares the catalog and request-local SQLite index.
+This delay is specific to the hosted Vercel demo and does not apply when the
+dashboard is run locally with `python -m dashboard.app`. Playback is immediate
+once the replay response has loaded. The deployment adapter lives in
+`api/index.py` and `vercel_app/`; the local dashboard and official evaluator
+remain independent.
+
 ## Contents
 
+- [Live demo](#live-demo)
 - [What Seekly contributes](#what-seekly-contributes)
 - [Results](#results)
 - [How the four scenarios differ](#how-the-four-scenarios-differ)
@@ -382,6 +406,11 @@ python -m unittest discover -s tests -v
 
 The dashboard is an optional demonstration layer; the official evaluator
 imports the Python Agent directly and does not require a URL or fixed port.
+
+For a hosted version, use the
+[live Vercel demo](https://techjam-conversational-search.vercel.app/). It runs
+the deterministic replay path and displays the validated offline evaluation;
+the full 200-case evaluator remains a local command.
 
 ```bash
 python -m dashboard.app --port 8000
