@@ -27,10 +27,57 @@ def _load_json(path: Path) -> dict:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-@lru_cache(maxsize=1)
 def _dashboard() -> DashboardService:
-    """Load the catalog once per warm function instance."""
+    """Build request-local state so SQLite never crosses serverless threads."""
     return DashboardService(CATALOG_PATH, DATASET_PATH)
+
+
+@lru_cache(maxsize=1)
+def _test_case_rows() -> tuple[dict, ...]:
+    """Load the public case selector without constructing the SQLite index."""
+    samples: list[dict] = []
+    with DATASET_PATH.open(encoding="utf-8") as handle:
+        for line in handle:
+            if line.strip():
+                samples.append(json.loads(line))
+
+    target_ids = {
+        str(sample["ground_truth"]["parent_asin"])
+        for sample in samples
+    }
+    titles: dict[str, str] = {}
+    with CATALOG_PATH.open(encoding="utf-8") as handle:
+        for line in handle:
+            product = json.loads(line)
+            parent_asin = str(product["parent_asin"])
+            if parent_asin in target_ids:
+                titles[parent_asin] = str(product.get("title") or parent_asin)
+
+    return tuple({
+        "sample_id": sample["sample_id"],
+        "scenario_type": sample["scenario_type"],
+        "difficulty_bucket": sample.get("difficulty_bucket"),
+        "category_bucket": sample.get("category_bucket"),
+        "target_title": titles[str(sample["ground_truth"]["parent_asin"])],
+    } for sample in samples)
+
+
+def _list_test_cases(
+    scenario: str | None,
+    difficulty: str | None,
+    query: str | None,
+) -> list[dict]:
+    query_value = (query or "").casefold().strip()
+    return [
+        row
+        for row in _test_case_rows()
+        if (not scenario or row["scenario_type"] == scenario)
+        and (not difficulty or row["difficulty_bucket"] == difficulty)
+        and (
+            not query_value
+            or query_value in f"{row['sample_id']} {row['target_title']}".casefold()
+        )
+    ]
 
 
 def _replay_payload(sample_id: str) -> dict:
@@ -63,10 +110,10 @@ class handler(BaseHTTPRequestHandler):
                 })
                 return
             if path == "/api/test-cases":
-                rows = _dashboard().list_test_cases(
-                    scenario=(query.get("scenario") or [None])[0],
-                    difficulty=(query.get("difficulty") or [None])[0],
-                    query=(query.get("q") or [None])[0],
+                rows = _list_test_cases(
+                    (query.get("scenario") or [None])[0],
+                    (query.get("difficulty") or [None])[0],
+                    (query.get("q") or [None])[0],
                 )
                 self._json({"test_cases": rows, "count": len(rows)})
                 return

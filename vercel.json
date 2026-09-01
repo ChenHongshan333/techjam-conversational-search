@@ -2,6 +2,7 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
   "buildCommand": "python3 vercel_app/prepare.py",
+  "outputDirectory": ".",
   "functions": {
     "api/index.py": {
       "maxDuration": 60,
